@@ -33,6 +33,7 @@ fun BowlingControls(
     runUpProgress: Float,
     tiltDirection: Float,
     bowlerName: String,
+    shot: BatterShot? = null,
     onDeliveryReleased: (targetLine: PitchLine, targetLength: PitchLength, deliveryTiming: DeliveryTiming, postPitchTilt: Float) -> Unit
 ) {
     var isHolding by remember { mutableStateOf(false) }
@@ -80,13 +81,19 @@ fun BowlingControls(
                     )
                 }
         ) {
-            BowlingAimPitch(aimFraction = aimFraction, isHolding = isHolding, liveTilt = tiltDirection)
+            BowlingAimPitch(
+                aimFraction = aimFraction,
+                isHolding = isHolding,
+                liveTilt = tiltDirection,
+                progress = runUpProgress,
+                shot = shot
+            )
         }
     }
 }
 
 @Composable
-private fun BowlingAimPitch(aimFraction: Offset, isHolding: Boolean, liveTilt: Float) {
+private fun BowlingAimPitch(aimFraction: Offset, isHolding: Boolean, liveTilt: Float, progress: Float, shot: BatterShot?) {
     Canvas(modifier = Modifier.fillMaxSize()) {
         val w = size.width
         val h = size.height
@@ -106,10 +113,16 @@ private fun BowlingAimPitch(aimFraction: Offset, isHolding: Boolean, liveTilt: F
 
         // batting-end stumps (the target, and where length is measured toward) at the bottom
         drawStumps(centerX = w / 2f, baseY = h * 0.94f, scale = 1.6f)
-        // a hint of the bowler's own end at the top, for orientation
+        // the bowler's own end at the top - this is the player's own bowler, run-up animated
+        // from the same release-timing sweep they're aiming against
         drawStumps(centerX = w / 2f, baseY = h * 0.06f, scale = 1.6f)
 
-        drawBatterFigure(centerX = w / 2f - 100f, feetY = h * 0.90f, scale = 1.6f)
+        drawBowlerFigure(centerX = w / 2f + 90f, feetY = h * 0.20f, progress = progress, scale = 1.6f)
+        drawBatterFigure(centerX = w / 2f - 100f, feetY = h * 0.90f, scale = 1.6f, shot = shot)
+
+        val ballY = ballTravelY(h, progress)
+        drawCircle(Color(0xFFB71C1C), radius = 14f, center = Offset(w / 2f, ballY))
+        drawCircle(Color.White, radius = 14f, center = Offset(w / 2f, ballY), style = Stroke(width = 2f))
 
         if (isHolding) {
             val touchPoint = Offset(aimFraction.x * w, aimFraction.y * h)

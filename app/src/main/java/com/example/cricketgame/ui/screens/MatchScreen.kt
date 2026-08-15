@@ -23,6 +23,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.cricketgame.data.MatchFormat
 import com.example.cricketgame.data.Team
 import com.example.cricketgame.data.TossChoice
+import com.example.cricketgame.viewmodel.MatchUiState
 import com.example.cricketgame.sensor.TiltSensorController
 import com.example.cricketgame.viewmodel.DeliveryPhase
 import com.example.cricketgame.viewmodel.MatchViewModel
@@ -84,10 +85,13 @@ fun MatchScreen(
         val showBackdrop = uiState.isPlayerBatting ||
             uiState.phase == DeliveryPhase.INNINGS_BREAK ||
             uiState.phase == DeliveryPhase.MATCH_OVER
+        // The just-played shot's pose/trajectory only makes sense while its outcome is showing.
+        val batterShot = if (uiState.phase == DeliveryPhase.BALL_RESULT) batterShotFrom(uiState) else null
         if (showBackdrop) {
             PitchBackdrop(
                 ballProgress = if (uiState.phase == DeliveryPhase.RUN_UP) runUp.progress else 1f,
-                showBall = uiState.phase == DeliveryPhase.RUN_UP || uiState.phase == DeliveryPhase.BALL_RESULT
+                showBall = uiState.phase == DeliveryPhase.RUN_UP || uiState.phase == DeliveryPhase.BALL_RESULT,
+                shot = batterShot
             )
             Spacer(Modifier.height(16.dp))
         }
@@ -109,6 +113,7 @@ fun MatchScreen(
                             runUpProgress = runUp.progress,
                             tiltDirection = tilt,
                             bowlerName = uiState.bowlerName,
+                            shot = batterShot,
                             onDeliveryReleased = { line, length, deliveryTiming, postTilt ->
                                 viewModel.bowlDelivery(line, length, deliveryTiming, postTilt)
                             }
@@ -130,6 +135,13 @@ fun MatchScreen(
             )
         }
     }
+}
+
+/** Builds the just-played shot's pose/trajectory details from ui state, or null if incomplete. */
+private fun batterShotFrom(uiState: MatchUiState): BatterShot? {
+    val aggression = uiState.lastBallAggression ?: return null
+    val timing = uiState.lastBallTimingQuality ?: return null
+    return BatterShot(aggression, timing, uiState.lastBallTiltDirection, uiState.lastBallRuns)
 }
 
 /**

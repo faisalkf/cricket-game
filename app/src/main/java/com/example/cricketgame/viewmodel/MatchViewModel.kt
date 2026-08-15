@@ -45,6 +45,12 @@ data class MatchUiState(
     val recentBalls: List<String> = emptyList(),
     val phase: DeliveryPhase = DeliveryPhase.RUN_UP,
     val lastBallSummary: String? = null,
+    // Details of the just-played shot, for the batter's brief shot-pose/trajectory visual -
+    // null whenever there's no delivery to show yet (see MatchScreen/BatterShot).
+    val lastBallAggression: Aggression? = null,
+    val lastBallTimingQuality: TimingQuality? = null,
+    val lastBallTiltDirection: Float = 0f,
+    val lastBallRuns: Int = 0,
     val matchResult: String? = null
 )
 
@@ -227,7 +233,11 @@ class MatchViewModel(
                 isPlayerBatting = playerBatting,
                 strikerName = currentStriker.name,
                 bowlerName = currentBowler.name,
-                lastBallSummary = null
+                lastBallSummary = null,
+                lastBallAggression = null,
+                lastBallTimingQuality = null,
+                lastBallTiltDirection = 0f,
+                lastBallRuns = 0
             )
         }
         startRunUpLoop()
@@ -396,6 +406,10 @@ class MatchViewModel(
                 wickets = innings.wickets,
                 oversText = "${innings.oversCompleted}.${innings.ballsInCurrentOver}",
                 lastBallSummary = summaryFor(result, legalDelivery),
+                lastBallAggression = result.aggression,
+                lastBallTimingQuality = result.timingQuality,
+                lastBallTiltDirection = result.tiltDirection,
+                lastBallRuns = result.runsScored,
                 recentBalls = currentOverCodes.toList()
             )
         }
