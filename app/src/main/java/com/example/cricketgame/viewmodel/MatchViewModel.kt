@@ -63,7 +63,11 @@ data class MatchUiState(
     val lastBallTimingQuality: TimingQuality? = null,
     val lastBallTiltDirection: Float = 0f,
     val lastBallRuns: Int = 0,
-    val matchResult: String? = null
+    val matchResult: String? = null,
+    // Increments once per resolved ball (see applyBallResult) - a stable key for one-shot
+    // per-ball effects (shot-impact animation, screen shake, sound) that lastBallSummary alone
+    // can't provide, since two consecutive balls can produce identical summary text.
+    val ballSeq: Int = 0
 )
 
 /**
@@ -468,7 +472,8 @@ class MatchViewModel(
                 lastBallTimingQuality = result.timingQuality,
                 lastBallTiltDirection = result.tiltDirection,
                 lastBallRuns = result.runsScored,
-                recentBalls = currentOverCodes.toList()
+                recentBalls = currentOverCodes.toList(),
+                ballSeq = it.ballSeq + 1
             )
         }
 

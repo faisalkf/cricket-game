@@ -7,7 +7,6 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
@@ -37,6 +36,9 @@ fun BowlingControls(
     tiltDirection: Float,
     bowlerName: String,
     shot: BatterShot? = null,
+    // Per-ball counter from MatchUiState - keys the shot-impact (swoosh/dust) animation so it
+    // restarts exactly once per new ball; see rememberShotImpactProgress.
+    ballSeq: Int = 0,
     onDeliveryReleased: (targetLine: PitchLine, targetLength: PitchLength, deliveryTiming: DeliveryTiming, postPitchTilt: Float) -> Unit
 ) {
     var isHolding by remember { mutableStateOf(false) }
@@ -89,30 +91,30 @@ fun BowlingControls(
                 isHolding = isHolding,
                 liveTilt = tiltDirection,
                 progress = ballProgress,
-                shot = shot
+                shot = shot,
+                ballSeq = ballSeq
             )
         }
     }
 }
 
 @Composable
-private fun BowlingAimPitch(aimFraction: Offset, isHolding: Boolean, liveTilt: Float, progress: Float, shot: BatterShot?) {
+private fun BowlingAimPitch(
+    aimFraction: Offset,
+    isHolding: Boolean,
+    liveTilt: Float,
+    progress: Float,
+    shot: BatterShot?,
+    ballSeq: Int
+) {
+    val impact = rememberShotImpactProgress(ballSeq, shot)
     Canvas(modifier = Modifier.fillMaxSize()) {
         val w = size.width
         val h = size.height
 
-        drawRect(Color(0xFF3F7D3F), size = Size(w, h)) // outfield, matches the batting backdrop
-
-        val stripLeft = w * 0.30f
-        val stripRight = w * 0.70f
-        drawRect(
-            Color(0xFFD9B876),
-            topLeft = Offset(stripLeft, 0f),
-            size = Size(stripRight - stripLeft, h)
-        ) // pitch
-
-        drawLine(Color.White, Offset(stripLeft, h * 0.06f), Offset(stripRight, h * 0.06f), strokeWidth = 3f)
-        drawLine(Color.White, Offset(stripLeft, h * 0.94f), Offset(stripRight, h * 0.94f), strokeWidth = 3f)
+        // Shared with PitchBackdrop (the batting screen's pitch) so both screens read as the
+        // same place.
+        drawPitchBackground(w, h)
 
         // the bowler's own end at the bottom - this is the player's own bowler, run-up animated
         // from the same release-timing sweep they're aiming against, matching PitchBackdrop's
@@ -122,7 +124,10 @@ private fun BowlingAimPitch(aimFraction: Offset, isHolding: Boolean, liveTilt: F
         drawStumps(centerX = w / 2f, baseY = h * 0.06f, scale = 1.6f)
 
         drawBowlerFigure(centerX = w / 2f + 90f, feetY = h * 0.80f, progress = progress, scale = 1.6f)
-        drawBatterFigure(centerX = w / 2f - 100f, feetY = h * 0.10f, scale = 1.6f, shot = shot)
+        drawBatterFigure(
+            centerX = w / 2f - 100f, feetY = h * 0.10f, scale = 1.6f, shot = shot,
+            swooshProgress = impact.swoosh, dustProgress = impact.dust
+        )
 
         val ballY = ballTravelY(h, progress)
         drawCircle(Color(0xFFB71C1C), radius = 14f, center = Offset(w / 2f, ballY))

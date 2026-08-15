@@ -1,12 +1,21 @@
 package com.example.cricketgame.ui.screens
 
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearOutSlowInEasing
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.geometry.lerp
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.DrawScope
@@ -14,13 +23,18 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.unit.dp
 import com.example.cricketgame.data.Aggression
 import com.example.cricketgame.data.TimingQuality
+import kotlinx.coroutines.launch
+import kotlin.math.PI
+import kotlin.math.cos
+import kotlin.math.sin
 
 /**
  * Shared match-screen visuals, kept to plain Canvas shapes (no drawables/assets) so the
  * screen builds reliably everywhere: a colored timing bar with a moving needle (bands are
  * caller-supplied so batting's 5-zone sweep and bowling's 4-zone sweep can each use their own
  * zone layout), and a simple top-down pitch with stumps, a bowler, a batter and a travelling
- * ball.
+ * ball. Figures/background lean on gradient brushes rather than flat fills for a bit of shading,
+ * but stay well within plain Canvas primitives - no bitmaps.
  */
 
 /** One colored segment of a [TimingGauge], as a from/to fraction (0f..1f) of the bar's width. */
@@ -65,6 +79,38 @@ fun TimingGauge(progress: Float, bands: List<GaugeBand> = BattingGaugeBands, mod
     }
 }
 
+/** Duration of the bat-swoosh sweep/trail animation once a shot is played. */
+private const val SWOOSH_DURATION_MS = 260
+
+/** Duration of the dust-puff burst at the point of bat-ball contact. */
+private const val DUST_DURATION_MS = 320
+
+/** Bat-swoosh + dust-puff progress (each 0f..1f) for a just-played shot. */
+data class ShotImpactProgress(val swoosh: Float, val dust: Float)
+
+/**
+ * Drives [ShotImpactProgress] for a just-played shot, keyed on [ballSeq] (a per-ball counter
+ * from MatchUiState, not the shot's own content) so it restarts exactly once per new ball rather
+ * than on every recomposition - shared between PitchBackdrop and BowlingAimPitch so both
+ * screens' bat-swoosh/dust-puff timing feel identical. Dust only plays when contact was actually
+ * made (skipped on a RED-zone miss - there's nothing to puff).
+ */
+@Composable
+internal fun rememberShotImpactProgress(ballSeq: Int, shot: BatterShot?): ShotImpactProgress {
+    val swoosh = remember { Animatable(0f) }
+    val dust = remember { Animatable(0f) }
+    LaunchedEffect(ballSeq) {
+        if (shot == null) return@LaunchedEffect
+        swoosh.snapTo(0f)
+        dust.snapTo(0f)
+        launch { swoosh.animateTo(1f, tween(SWOOSH_DURATION_MS, easing = FastOutSlowInEasing)) }
+        if (shot.timingQuality != TimingQuality.RED) {
+            launch { dust.animateTo(1f, tween(DUST_DURATION_MS, easing = LinearOutSlowInEasing)) }
+        }
+    }
+    return ShotImpactProgress(swoosh.value, dust.value)
+}
+
 /**
  * The batting-side pitch, deliberately matching BowlingControls' BowlingAimPitch in size and
  * proportions (same 500dp height, same 0.30-0.70 pitch strip, same stump margins and 1.6x
@@ -73,23 +119,19 @@ fun TimingGauge(progress: Float, bands: List<GaugeBand> = BattingGaugeBands, mod
  * run-up and the ball travelling down the pitch as the delivery is bowled.
  */
 @Composable
-fun PitchBackdrop(ballProgress: Float, showBall: Boolean, shot: BatterShot? = null, modifier: Modifier = Modifier) {
+fun PitchBackdrop(
+    ballProgress: Float,
+    showBall: Boolean,
+    shot: BatterShot? = null,
+    ballSeq: Int = 0,
+    modifier: Modifier = Modifier
+) {
+    val impact = rememberShotImpactProgress(ballSeq, shot)
     Canvas(modifier = modifier.fillMaxWidth().height(500.dp)) {
         val w = size.width
         val h = size.height
 
-        drawRect(Color(0xFF3F7D3F), size = Size(w, h)) // outfield
-
-        val stripLeft = w * 0.30f
-        val stripRight = w * 0.70f
-        drawRect(
-            Color(0xFFD9B876),
-            topLeft = Offset(stripLeft, 0f),
-            size = Size(stripRight - stripLeft, h)
-        ) // pitch
-
-        drawLine(Color.White, Offset(stripLeft, h * 0.06f), Offset(stripRight, h * 0.06f), strokeWidth = 3f)
-        drawLine(Color.White, Offset(stripLeft, h * 0.94f), Offset(stripRight, h * 0.94f), strokeWidth = 3f)
+        drawPitchBackground(w, h)
 
         drawStumps(centerX = w / 2f, baseY = h * 0.06f, scale = 1.6f)
         drawStumps(centerX = w / 2f, baseY = h * 0.94f, scale = 1.6f)
@@ -97,7 +139,10 @@ fun PitchBackdrop(ballProgress: Float, showBall: Boolean, shot: BatterShot? = nu
         // Bowler at the bottom, batter at the top - matches BowlingAimPitch's layout so both
         // screens read as the same place, and the ball always travels bottom -> top.
         drawBowlerFigure(centerX = w / 2f + 90f, feetY = h * 0.80f, progress = ballProgress, scale = 1.6f)
-        drawBatterFigure(centerX = w / 2f - 100f, feetY = h * 0.10f, scale = 1.6f, shot = shot)
+        drawBatterFigure(
+            centerX = w / 2f - 100f, feetY = h * 0.10f, scale = 1.6f, shot = shot,
+            swooshProgress = impact.swoosh, dustProgress = impact.dust
+        )
 
         if (showBall) {
             val ballY = ballTravelY(h, ballProgress)
@@ -113,24 +158,84 @@ fun PitchBackdrop(ballProgress: Float, showBall: Boolean, shot: BatterShot? = nu
  *  PitchBackdrop/BowlingAimPitch), so progress 0f->1f sweeps y from bottom to top. */
 internal fun ballTravelY(h: Float, progress: Float): Float = h * (0.90f - 0.80f * progress.coerceIn(0f, 1f))
 
+/**
+ * The pitch/outfield background shared by both pitch views - a mown-stripe outfield with a soft
+ * vignette and a pitch strip with a worn-centre gradient, rather than the flat single-color
+ * fills this used to be, for a bit more illustrated richness. internal (not private) so
+ * BowlingControls' pitch view can reuse it, keeping both screens visually identical.
+ */
+internal fun DrawScope.drawPitchBackground(w: Float, h: Float) {
+    // Outfield: alternating mown-stripe bands (a real groundskeeping look) instead of one flat
+    // green fill.
+    val stripeCount = 12
+    val stripeH = h / stripeCount
+    for (i in 0 until stripeCount) {
+        val shade = if (i % 2 == 0) Color(0xFF3E7C3E) else Color(0xFF4A8C4A)
+        drawRect(shade, topLeft = Offset(0f, i * stripeH), size = Size(w, stripeH + 1f))
+    }
+    // Soft vignette for a touch of depth toward the edges.
+    drawRect(
+        brush = Brush.radialGradient(
+            colors = listOf(Color.Transparent, Color(0x2A000000)),
+            center = Offset(w / 2f, h / 2f),
+            radius = maxOf(w, h) * 0.72f
+        ),
+        size = Size(w, h)
+    )
+
+    val stripLeft = w * 0.30f
+    val stripRight = w * 0.70f
+    // Pitch strip: a soft vertical gradient - lighter/fresher near both ends, a touch worn and
+    // darker through the middle where most deliveries land - rather than a flat tan fill.
+    drawRect(
+        brush = Brush.verticalGradient(
+            colors = listOf(
+                Color(0xFFE3CB92), Color(0xFFD9B876), Color(0xFFC8A968),
+                Color(0xFFD9B876), Color(0xFFE3CB92)
+            )
+        ),
+        topLeft = Offset(stripLeft, 0f),
+        size = Size(stripRight - stripLeft, h)
+    )
+    // Faint centre seam for a bit of texture on the strip itself.
+    drawLine(Color(0x1A3E2723), Offset(w / 2f, h * 0.08f), Offset(w / 2f, h * 0.92f), strokeWidth = 1.5f)
+
+    drawLine(Color.White, Offset(stripLeft, h * 0.06f), Offset(stripRight, h * 0.06f), strokeWidth = 3f)
+    drawLine(Color.White, Offset(stripLeft, h * 0.94f), Offset(stripRight, h * 0.94f), strokeWidth = 3f)
+}
+
+/** A soft grounding shadow beneath a figure's feet - a cheap depth cue shared by both figures. */
+private fun DrawScope.drawFootShadow(centerX: Float, feetY: Float, scale: Float) {
+    drawOval(
+        Color(0x33000000),
+        topLeft = Offset(centerX - 16f * scale, feetY - 3f * scale),
+        size = Size(32f * scale, 8f * scale)
+    )
+}
+
 /** internal (not private) so BowlingControls' larger single-pitch view can reuse these at a bigger scale. */
 internal fun DrawScope.drawStumps(centerX: Float, baseY: Float, scale: Float = 1f) {
     val height = 34f * scale
     val spacing = 10f * scale
     val strokeW = 4f * scale
+    // A light-to-dark gradient across the three stumps gives them a rounder, more turned-wood
+    // feel than a flat brown fill.
+    val woodBrush = Brush.horizontalGradient(listOf(Color(0xFF6D4C37), Color(0xFF3E2723)))
     listOf(-spacing, 0f, spacing).forEach { dx ->
         drawLine(
-            Color(0xFF3E2723),
+            woodBrush,
             Offset(centerX + dx, baseY),
             Offset(centerX + dx, baseY - height),
-            strokeWidth = strokeW
+            strokeWidth = strokeW,
+            cap = StrokeCap.Round
         )
     }
     drawLine(
         Color(0xFF3E2723),
         Offset(centerX - spacing - 3f * scale, baseY - height),
         Offset(centerX + spacing + 3f * scale, baseY - height),
-        strokeWidth = strokeW
+        strokeWidth = strokeW,
+        cap = StrokeCap.Round
     )
 }
 
@@ -152,14 +257,25 @@ internal fun DrawScope.drawBowlerFigure(centerX: Float, feetY: Float, progress: 
     val headCenter = Offset(centerX, bodyTop - 12f * scale)
     val headRadius = 12f * scale
 
+    drawFootShadow(centerX, feet, scale)
+
     // Fielding side's shirt/cap - reuses the ball/wicket-flash red already in the palette rather
-    // than introducing a new color, distinguishing it from the batter's blue.
+    // than introducing a new color, distinguishing it from the batter's blue. A gradient rather
+    // than a flat fill gives the torso a bit of shading/sheen.
     val shirt = Color(0xFFB71C1C)
     val shirtOutline = Color(0xFF7F0000)
+    val shirtBrush = Brush.verticalGradient(listOf(Color(0xFFE53935), shirt, shirtOutline))
 
     drawCircle(shirt, radius = headRadius, center = headCenter)
     drawCircle(shirtOutline, radius = headRadius, center = headCenter, style = Stroke(width = 2f * scale))
-    drawLine(shirt, Offset(centerX, bodyTop), Offset(centerX, bodyBottom), strokeWidth = 14f * scale, cap = StrokeCap.Round)
+    // Cap brim - a small kit detail giving the head more silhouette than a bare circle.
+    drawRoundRect(
+        Color.White,
+        topLeft = Offset(headCenter.x, headCenter.y - 3f * scale),
+        size = Size(13f * scale, 4f * scale),
+        cornerRadius = CornerRadius(2f * scale, 2f * scale)
+    )
+    drawLine(shirtBrush, Offset(centerX, bodyTop), Offset(centerX, bodyBottom), strokeWidth = 14f * scale, cap = StrokeCap.Round)
 
     if (approach > 0.8f) {
         // delivery stride: front leg planted, back leg trailing, bowling arm raised overhead
@@ -176,40 +292,71 @@ internal fun DrawScope.drawBowlerFigure(centerX: Float, feetY: Float, progress: 
     }
 }
 
+/** Wood-tone gradient shared by the resting-stance bat and the in-swing bat (see [drawBatSwoosh]). */
+private val BatBrush = Brush.linearGradient(listOf(Color(0xFFA1887F), Color(0xFF6D4C41)))
+
 /**
  * The batter figure. With [shot] null, this is the resting stance shown while waiting for the
  * next delivery. With [shot] set (briefly, right after a ball is resolved), it instead shows a
  * pose roughly matching the aggression/timing that was played, plus a simple directional
  * trajectory line toward wherever tilt sent it - longer/greener for a boundary, a short white
- * stub for a single or dot, nothing for a miss.
+ * stub for a single or dot, nothing for a miss. [swooshProgress]/[dustProgress] (each 0f..1f,
+ * see [rememberShotImpactProgress]) drive the bat-swing trail and contact dust puff.
  */
-internal fun DrawScope.drawBatterFigure(centerX: Float, feetY: Float, scale: Float = 1f, shot: BatterShot? = null) {
+internal fun DrawScope.drawBatterFigure(
+    centerX: Float,
+    feetY: Float,
+    scale: Float = 1f,
+    shot: BatterShot? = null,
+    swooshProgress: Float = 1f,
+    dustProgress: Float = 0f
+) {
     val bodyTop = feetY - 58f * scale
     val bodyBottom = feetY - 14f * scale
     val headCenter = Offset(centerX, bodyTop - 12f * scale)
     val headRadius = 12f * scale
 
+    drawFootShadow(centerX, feetY, scale)
+
     // A helmet (rather than a skin-tone head) reads clearly against both the green outfield
     // and the tan pitch regardless of exact shade - a plain skin tone nearly disappeared
     // against the pitch color here. The outline stroke guarantees contrast either way.
-    drawCircle(Color(0xFF1565C0), radius = headRadius, center = headCenter)
+    val helmet = Color(0xFF1565C0)
+    val helmetBrush = Brush.verticalGradient(listOf(Color(0xFF42A5F5), helmet, Color(0xFF0D3C73)))
+    drawCircle(helmet, radius = headRadius, center = headCenter)
     drawCircle(Color(0xFF0D3C73), radius = headRadius, center = headCenter, style = Stroke(width = 2f * scale))
-    drawLine(
-        Color.White,
-        Offset(headCenter.x - 6f * scale, headCenter.y + 3f * scale),
-        Offset(headCenter.x + 6f * scale, headCenter.y + 3f * scale),
-        strokeWidth = 1.5f * scale
-    )
+    // Grille - a few short parallel lines across the front, a bit more kit detail than the
+    // single mouth-guard line this used to be.
+    for (i in -1..1) {
+        drawLine(
+            Color.White,
+            Offset(headCenter.x - 6f * scale, headCenter.y + 2f * scale + i * 3f * scale),
+            Offset(headCenter.x + 6f * scale, headCenter.y + 2f * scale + i * 3f * scale),
+            strokeWidth = 1.2f * scale
+        )
+    }
 
-    drawLine(Color(0xFF1565C0), Offset(centerX, bodyTop), Offset(centerX, bodyBottom), strokeWidth = 14f * scale, cap = StrokeCap.Round)
-    drawLine(Color(0xFFEEEEEE), Offset(centerX, bodyBottom), Offset(centerX - 10f * scale, feetY), strokeWidth = 8f * scale, cap = StrokeCap.Round)
-    drawLine(Color(0xFFEEEEEE), Offset(centerX, bodyBottom), Offset(centerX + 10f * scale, feetY), strokeWidth = 8f * scale, cap = StrokeCap.Round)
+    drawLine(helmetBrush, Offset(centerX, bodyTop), Offset(centerX, bodyBottom), strokeWidth = 14f * scale, cap = StrokeCap.Round)
 
-    val batColor = Color(0xFF8D6E63)
+    // Pads - chunkier rounded leg guards with a thin trim stripe, standing in for the plain thin
+    // leg lines this used to be.
+    val padColor = Color(0xFFF5F5F5)
+    listOf(-10f, 10f).forEach { dx ->
+        val padTopLeft = Offset(centerX + dx * scale - 4.5f * scale, bodyBottom)
+        val padSize = Size(9f * scale, feetY - bodyBottom)
+        drawRoundRect(padColor, topLeft = padTopLeft, size = padSize, cornerRadius = CornerRadius(4f * scale, 4f * scale))
+        drawLine(
+            helmet.copy(alpha = 0.7f),
+            Offset(padTopLeft.x, padTopLeft.y + 4f * scale),
+            Offset(padTopLeft.x + padSize.width, padTopLeft.y + 4f * scale),
+            strokeWidth = 1.2f * scale
+        )
+    }
+
     if (shot == null) {
         // resting stance - bat grounded just in front, waiting for the next ball
         drawLine(
-            batColor,
+            BatBrush,
             Offset(centerX + 10f * scale, bodyBottom - 6f * scale),
             Offset(centerX + 22f * scale, feetY - 2f * scale),
             strokeWidth = 6f * scale,
@@ -232,7 +379,8 @@ internal fun DrawScope.drawBatterFigure(centerX: Float, feetY: Float, scale: Flo
             Offset(centerX + reach * scale, bodyTop - reach * scale)
         }
     }
-    drawLine(batColor, batStart, batEnd, strokeWidth = 6f * scale, cap = StrokeCap.Round)
+    drawBatSwoosh(batStart, batEnd, swooshProgress, shot, strokeWidth = 6f * scale)
+    if (!missed) drawDustPuff(batStart, dustProgress, scale)
 
     // Post-shot trajectory: a plain directional line with a dot tip (no arrowhead geometry -
     // stays simple) from the bat toward wherever tilt sent it, length/color roughly reflecting
@@ -251,5 +399,64 @@ internal fun DrawScope.drawBatterFigure(centerX: Float, feetY: Float, scale: Flo
         val trajWidth = (if (shot.runs >= 4) 5f else 3f) * scale
         drawLine(trajColor, trajStart, trajEnd, strokeWidth = trajWidth, cap = StrokeCap.Round)
         drawCircle(trajColor, radius = trajWidth * 0.9f, center = trajEnd)
+    }
+}
+
+/** How pronounced the bat-swoosh trail is: longer, more numerous and brighter for an aggressive
+ *  aerial shot, shortest and dimmest for a defensive block or a missed (RED-zone) swing. */
+private data class SwooshSpec(val trailCount: Int, val trailSpacing: Float, val baseAlpha: Float, val color: Color)
+
+private fun swooshSpecFor(shot: BatterShot): SwooshSpec = when {
+    shot.timingQuality == TimingQuality.RED -> SwooshSpec(2, 0.16f, 0.20f, Color(0xFFBCAAA4))
+    shot.aggression == Aggression.DEFENSIVE -> SwooshSpec(2, 0.14f, 0.26f, Color(0xFFECEFF1))
+    shot.aggression == Aggression.GROUND -> SwooshSpec(4, 0.12f, 0.40f, Color(0xFFFFE082))
+    else -> SwooshSpec(6, 0.10f, 0.55f, Color(0xFFFFF59D)) // AERIAL - longest, brightest trail
+}
+
+/**
+ * A brief arc/trail following the bat as it swings from [batStart] toward [batEnd], keyed to
+ * [progress] (0f..1f, see [rememberShotImpactProgress]) so the bat visibly sweeps into place
+ * over a couple hundred milliseconds rather than appearing instantly, leaving a fading trail of
+ * earlier positions behind it. Intensity (trail length/brightness) comes from [swooshSpecFor],
+ * scaled by [shot]'s aggression.
+ */
+internal fun DrawScope.drawBatSwoosh(batStart: Offset, batEnd: Offset, progress: Float, shot: BatterShot, strokeWidth: Float) {
+    val spec = swooshSpecFor(shot)
+    val head = progress.coerceIn(0f, 1f)
+    for (i in spec.trailCount downTo 1) {
+        val t = (head - i * spec.trailSpacing).coerceIn(0f, 1f)
+        if (t <= 0f) continue
+        val alpha = spec.baseAlpha * (1f - i.toFloat() / (spec.trailCount + 1))
+        if (alpha <= 0.02f) continue
+        drawLine(
+            spec.color.copy(alpha = alpha),
+            batStart,
+            lerp(batStart, batEnd, t),
+            strokeWidth = strokeWidth * 0.65f,
+            cap = StrokeCap.Round
+        )
+    }
+    drawLine(BatBrush, batStart, lerp(batStart, batEnd, head), strokeWidth = strokeWidth, cap = StrokeCap.Round)
+}
+
+/**
+ * A brief particle burst at the point of bat-ball contact, keyed to [progress] (0f..1f, see
+ * [rememberShotImpactProgress]) - a handful of dust-colored specks radiating outward and fading
+ * as the ball is struck away. Skipped entirely once the burst completes (see caller: only drawn
+ * on non-miss contact in the first place).
+ */
+internal fun DrawScope.drawDustPuff(center: Offset, progress: Float, scale: Float) {
+    val t = progress.coerceIn(0f, 1f)
+    if (t <= 0f || t >= 1f) return
+    val particleCount = 6
+    val maxRadius = 30f * scale
+    val alpha = (1f - t) * 0.65f
+    if (alpha <= 0.02f) return
+    for (i in 0 until particleCount) {
+        val angle = (i / particleCount.toFloat()) * (2f * PI).toFloat() + 0.4f
+        val dist = maxRadius * t
+        val p = Offset(center.x + cos(angle) * dist, center.y - sin(angle) * dist * 0.55f)
+        val r = (4.5f - 3f * t) * scale
+        drawCircle(Color(0xFFD9C9A3).copy(alpha = alpha), radius = r.coerceAtLeast(1f), center = p)
     }
 }

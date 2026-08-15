@@ -14,6 +14,8 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -22,11 +24,15 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.cricketgame.data.MatchFormat
 import com.example.cricketgame.data.Team
+import com.example.cricketgame.data.TimingQuality
 import com.example.cricketgame.data.TossChoice
+import com.example.cricketgame.sound.SoundEffects
 import com.example.cricketgame.viewmodel.MatchUiState
 import com.example.cricketgame.sensor.TiltSensorController
 import com.example.cricketgame.viewmodel.DeliveryPhase
 import com.example.cricketgame.viewmodel.MatchViewModel
+import kotlinx.coroutines.delay
+import kotlin.math.sin
 
 /**
  * Real match screen, driven by [MatchViewModel]:
@@ -65,7 +71,35 @@ fun MatchScreen(
         uiState.matchResult?.let { onMatchComplete(it) }
     }
 
-    Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
+    val soundEffects = remember { SoundEffects() }
+    DisposableEffect(Unit) { onDispose { soundEffects.release() } }
+
+    val isWicket = uiState.lastBallSummary?.startsWith("OUT") == true
+    val isBoundarySix = uiState.lastBallRuns >= 6
+
+    // ballSeq (not lastBallSummary) is the trigger key - two consecutive balls can produce
+    // identical summary text, which wouldn't otherwise re-fire a keyed effect. Skipped at
+    // ballSeq==0 so nothing plays/shakes on the very first composition, before any ball exists.
+    LaunchedEffect(uiState.ballSeq) {
+        if (uiState.ballSeq == 0) return@LaunchedEffect
+        when {
+            isWicket -> soundEffects.playWicket()
+            isBoundarySix -> soundEffects.playBoundary()
+            uiState.lastBallTimingQuality != null && uiState.lastBallTimingQuality != TimingQuality.RED ->
+                soundEffects.playImpact() // contact was made but it wasn't a boundary/wicket
+            // else: a total miss (RED, no contact) - deliberately silent
+        }
+    }
+
+    // Brief, subtle screen shake - only for a six or a wicket, never on routine balls.
+    val shakeOffset = rememberScreenShakeOffset(ballSeq = uiState.ballSeq, shouldShake = isWicket || isBoundarySix)
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp)
+            .graphicsLayer(translationX = shakeOffset.x, translationY = shakeOffset.y)
+    ) {
         val targetSuffix = uiState.target?.let { "   Target: $it" } ?: ""
         Text(
             "${uiState.battingTeamName} ${uiState.score}/${uiState.wickets}   Overs: ${uiState.oversText}$targetSuffix",
@@ -91,7 +125,8 @@ fun MatchScreen(
             PitchBackdrop(
                 ballProgress = runUp.ballProgress,
                 showBall = uiState.phase == DeliveryPhase.RUN_UP || uiState.phase == DeliveryPhase.BALL_RESULT,
-                shot = batterShot
+                shot = batterShot,
+                ballSeq = uiState.ballSeq
             )
             Spacer(Modifier.height(16.dp))
         }
@@ -115,6 +150,7 @@ fun MatchScreen(
                             tiltDirection = tilt,
                             bowlerName = uiState.bowlerName,
                             shot = batterShot,
+                            ballSeq = uiState.ballSeq,
                             onDeliveryReleased = { line, length, deliveryTiming, postTilt ->
                                 viewModel.bowlDelivery(line, length, deliveryTiming, postTilt)
                             }
@@ -136,6 +172,37 @@ fun MatchScreen(
             )
         }
     }
+}
+
+/** Duration of the screen-shake effect - short and subtle by design, not disorienting. */
+private const val SHAKE_DURATION_MS = 260
+
+/**
+ * A brief, decaying horizontal shake offset - only animated when [shouldShake] is true (a six
+ * or a wicket), keyed on [ballSeq] so it restarts exactly once per new ball. Applied to the
+ * whole screen's root Modifier via graphicsLayer, not just the pitch, for a bit more impact -
+ * kept short (260ms) and low-amplitude so it reads as a jolt rather than something disorienting.
+ */
+@Composable
+private fun rememberScreenShakeOffset(ballSeq: Int, shouldShake: Boolean): Offset {
+    var offset by remember { mutableStateOf(Offset.Zero) }
+    LaunchedEffect(ballSeq) {
+        if (!shouldShake) {
+            offset = Offset.Zero
+            return@LaunchedEffect
+        }
+        var elapsed = 0L
+        while (elapsed < SHAKE_DURATION_MS) {
+            val t = elapsed / SHAKE_DURATION_MS.toFloat()
+            val decay = 1f - t
+            val dx = sin(t * 6 * Math.PI).toFloat() * 14f * decay
+            offset = Offset(dx, 0f)
+            delay(16)
+            elapsed += 16
+        }
+        offset = Offset.Zero
+    }
+    return offset
 }
 
 /** Builds the just-played shot's pose/trajectory details from ui state, or null if incomplete. */
