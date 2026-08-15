@@ -26,8 +26,11 @@ fun CricketNavHost() {
             TeamSelectScreen(onTeamChosen = { navController.navigate(Routes.TOSS) })
         }
         composable(Routes.TOSS) {
-            TossScreen(onTossResolved = { navController.navigate(Routes.MATCH) })
+    TossScreen(onTossResolved = { won, choice ->
+        navController.navigate(Routes.MATCH)
+    })
         }
+
         composable(Routes.MATCH) {
             MatchScreen(onMatchComplete = { navController.navigate(Routes.RESULT) })
         }
