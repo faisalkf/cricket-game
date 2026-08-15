@@ -89,7 +89,7 @@ fun MatchScreen(
         val batterShot = if (uiState.phase == DeliveryPhase.BALL_RESULT) batterShotFrom(uiState) else null
         if (showBackdrop) {
             PitchBackdrop(
-                ballProgress = if (uiState.phase == DeliveryPhase.RUN_UP) runUp.progress else 1f,
+                ballProgress = runUp.ballProgress,
                 showBall = uiState.phase == DeliveryPhase.RUN_UP || uiState.phase == DeliveryPhase.BALL_RESULT,
                 shot = batterShot
             )
@@ -111,6 +111,7 @@ fun MatchScreen(
                     } else {
                         BowlingControls(
                             runUpProgress = runUp.progress,
+                            ballProgress = runUp.ballProgress,
                             tiltDirection = tilt,
                             bowlerName = uiState.bowlerName,
                             shot = batterShot,

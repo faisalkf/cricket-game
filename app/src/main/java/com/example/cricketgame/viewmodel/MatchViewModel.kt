@@ -29,6 +29,18 @@ enum class DeliveryPhase { RUN_UP, BALL_RESULT, INNINGS_BREAK, MATCH_OVER }
 /** Ease-in exponent for both sweeps: t^POWER starts slow and accelerates toward release/GREEN. */
 private const val RUN_UP_EASE_POWER = 2.2f
 
+/**
+ * Fixed duration of the ball's bottom-to-top pitch travel, deliberately independent of the
+ * timing sweep's own period (which varies by role/skill for gameplay-difficulty reasons - see
+ * startRunUpLoop). Keeps the ball itself feeling like the same delivery speed on the bowling
+ * and batting screens regardless of which sweep pacing is driving the timing gauge underneath.
+ */
+private const val BALL_FLIGHT_SWEEP_MS = 1400
+
+/** Duration of the short catch-up animation that finishes the ball's travel once a shot/delivery
+ *  is released mid-sweep, so it visually arrives at the batsman/stumps instead of jumping there. */
+private const val BALL_FLIGHT_FINISH_MS = 220
+
 /** Slower-changing state - the scoreboard, whose turn it is, the last outcome. */
 data class MatchUiState(
     val format: MatchFormat,
@@ -60,7 +72,12 @@ data class MatchUiState(
  */
 data class RunUpState(
     val progress: Float = 0f,       // 0f..1f, one eased one-way sweep per delivery
-    val quality: TimingQuality = TimingQuality.RED
+    val quality: TimingQuality = TimingQuality.RED,
+    // Drives the pitch visuals (bowler run-up figure + travelling ball) on a fixed, role/skill-
+    // independent clock (BALL_FLIGHT_SWEEP_MS) - separate from [progress], which paces the
+    // timing gauge and varies by role/skill for gameplay-difficulty reasons. Keeps the ball's
+    // visual travel speed consistent between the bowling and batting screens.
+    val ballProgress: Float = 0f
 )
 
 /**
@@ -128,9 +145,8 @@ class MatchViewModel(
     /** Called by BattingControls when the player releases the aggression slider. */
     fun playBattingShot(aggression: Aggression, tiltDirection: Float) {
         if (_uiState.value.phase != DeliveryPhase.RUN_UP) return
-        runUpJob?.cancel()
-
         val timing = _runUp.value.quality
+        finishBallFlight()
         val striker = currentStriker
         val fieldMode = currentFieldMode()
         val (outcome, runs) = BattingResolver.resolve(
@@ -173,7 +189,7 @@ class MatchViewModel(
         postPitchTilt: Float
     ) {
         if (_uiState.value.phase != DeliveryPhase.RUN_UP) return
-        runUpJob?.cancel()
+        finishBallFlight()
 
         val bowler = currentBowler
         val output = BowlingResolver.resolve(
@@ -257,9 +273,9 @@ class MatchViewModel(
                 // linear in time - it crawls through EARLY_RED and picks up speed into GREEN.
                 val periodMs = (3600 - currentBowler.bowlingSkill * 16).coerceIn(2200, 3600)
                 while (isActive) {
-                    val t = (elapsed % periodMs).toFloat() / periodMs
-                    val progress = t.pow(RUN_UP_EASE_POWER)
-                    _runUp.value = RunUpState(progress, timingQualityFor(progress)) // quality unused while bowling
+                    val progress = easedSweep(elapsed, periodMs)
+                    val ballProgress = easedSweep(elapsed, BALL_FLIGHT_SWEEP_MS)
+                    _runUp.value = RunUpState(progress, timingQualityFor(progress), ballProgress) // quality unused while bowling
                     delay(16)
                     elapsed += 16
                 }
@@ -270,12 +286,41 @@ class MatchViewModel(
                 // bowling's run-up) and snaps back to start the next ball's read from scratch.
                 val periodMs = (1600 - currentBowler.bowlingSkill * 8).coerceIn(800, 1600)
                 while (isActive) {
-                    val t = (elapsed % periodMs).toFloat() / periodMs
-                    val progress = t.pow(RUN_UP_EASE_POWER)
-                    _runUp.value = RunUpState(progress, timingQualityFor(progress))
+                    val progress = easedSweep(elapsed, periodMs)
+                    val ballProgress = easedSweep(elapsed, BALL_FLIGHT_SWEEP_MS)
+                    _runUp.value = RunUpState(progress, timingQualityFor(progress), ballProgress)
                     delay(16)
                     elapsed += 16
                 }
+            }
+        }
+    }
+
+    /** One eased one-way sweep (t^[RUN_UP_EASE_POWER]) of [periodMs], sampled at [elapsed] ms -
+     *  shared shape for the timing gauge and the (independently paced) ball-travel visuals. */
+    private fun easedSweep(elapsed: Long, periodMs: Int): Float {
+        val t = (elapsed % periodMs).toFloat() / periodMs
+        return t.pow(RUN_UP_EASE_POWER)
+    }
+
+    /**
+     * Cancels the run-up sweep and eases the ball's remaining travel - whatever fraction is
+     * left of [RunUpState.ballProgress] - smoothly to completion over a short, fixed duration,
+     * so releasing a shot/delivery never makes the ball visually jump straight to the batsman
+     * or stumps, however early or late in the sweep it was played.
+     */
+    private fun finishBallFlight() {
+        runUpJob?.cancel()
+        val startProgress = _runUp.value.ballProgress
+        if (startProgress >= 1f) return
+        runUpJob = viewModelScope.launch {
+            var elapsed = 0L
+            while (isActive) {
+                val t = (elapsed.toFloat() / BALL_FLIGHT_FINISH_MS).coerceIn(0f, 1f)
+                _runUp.update { it.copy(ballProgress = startProgress + (1f - startProgress) * t) }
+                if (t >= 1f) break
+                delay(16)
+                elapsed += 16
             }
         }
     }

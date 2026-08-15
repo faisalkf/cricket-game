@@ -94,8 +94,10 @@ fun PitchBackdrop(ballProgress: Float, showBall: Boolean, shot: BatterShot? = nu
         drawStumps(centerX = w / 2f, baseY = h * 0.06f, scale = 1.6f)
         drawStumps(centerX = w / 2f, baseY = h * 0.94f, scale = 1.6f)
 
-        drawBowlerFigure(centerX = w / 2f + 90f, feetY = h * 0.20f, progress = ballProgress, scale = 1.6f)
-        drawBatterFigure(centerX = w / 2f - 100f, feetY = h * 0.90f, scale = 1.6f, shot = shot)
+        // Bowler at the bottom, batter at the top - matches BowlingAimPitch's layout so both
+        // screens read as the same place, and the ball always travels bottom -> top.
+        drawBowlerFigure(centerX = w / 2f + 90f, feetY = h * 0.80f, progress = ballProgress, scale = 1.6f)
+        drawBatterFigure(centerX = w / 2f - 100f, feetY = h * 0.10f, scale = 1.6f, shot = shot)
 
         if (showBall) {
             val ballY = ballTravelY(h, ballProgress)
@@ -106,8 +108,10 @@ fun PitchBackdrop(ballProgress: Float, showBall: Boolean, shot: BatterShot? = nu
 }
 
 /** Y position (within a canvas of height h) for the ball as it travels bowler->batsman end,
- *  synced to the run-up sweep's progress. Shared so both pitch views move it identically. */
-internal fun ballTravelY(h: Float, progress: Float): Float = h * (0.10f + 0.80f * progress.coerceIn(0f, 1f))
+ *  synced to the run-up sweep's progress. Shared so both pitch views move it identically.
+ *  The bowler's end is at the BOTTOM of the canvas and the batter's end at the TOP (see
+ *  PitchBackdrop/BowlingAimPitch), so progress 0f->1f sweeps y from bottom to top. */
+internal fun ballTravelY(h: Float, progress: Float): Float = h * (0.90f - 0.80f * progress.coerceIn(0f, 1f))
 
 /** internal (not private) so BowlingControls' larger single-pitch view can reuse these at a bigger scale. */
 internal fun DrawScope.drawStumps(centerX: Float, baseY: Float, scale: Float = 1f) {
@@ -140,7 +144,9 @@ internal fun DrawScope.drawStumps(centerX: Float, baseY: Float, scale: Float = 1
  */
 internal fun DrawScope.drawBowlerFigure(centerX: Float, feetY: Float, progress: Float, scale: Float = 1f) {
     val approach = progress.coerceIn(0f, 1f)
-    val feet = feetY - (1f - approach) * 18f * scale
+    // The bowler sits at the BOTTOM of the pitch, so running in toward release means moving UP
+    // the canvas (toward the batter's end) - feet's y decreases as approach nears 1.
+    val feet = feetY + (1f - approach) * 18f * scale
     val bodyTop = feet - 58f * scale
     val bodyBottom = feet - 14f * scale
     val headCenter = Offset(centerX, bodyTop - 12f * scale)

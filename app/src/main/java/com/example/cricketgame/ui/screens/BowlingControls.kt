@@ -31,6 +31,9 @@ import com.example.cricketgame.data.PitchLine
 @Composable
 fun BowlingControls(
     runUpProgress: Float,
+    // Paces the pitch visuals (bowler figure + travelling ball) independently of runUpProgress
+    // (which drives the timing gauge/release classification below) - see RunUpState.ballProgress.
+    ballProgress: Float,
     tiltDirection: Float,
     bowlerName: String,
     shot: BatterShot? = null,
@@ -85,7 +88,7 @@ fun BowlingControls(
                 aimFraction = aimFraction,
                 isHolding = isHolding,
                 liveTilt = tiltDirection,
-                progress = runUpProgress,
+                progress = ballProgress,
                 shot = shot
             )
         }
@@ -111,14 +114,15 @@ private fun BowlingAimPitch(aimFraction: Offset, isHolding: Boolean, liveTilt: F
         drawLine(Color.White, Offset(stripLeft, h * 0.06f), Offset(stripRight, h * 0.06f), strokeWidth = 3f)
         drawLine(Color.White, Offset(stripLeft, h * 0.94f), Offset(stripRight, h * 0.94f), strokeWidth = 3f)
 
-        // batting-end stumps (the target, and where length is measured toward) at the bottom
+        // the bowler's own end at the bottom - this is the player's own bowler, run-up animated
+        // from the same release-timing sweep they're aiming against, matching PitchBackdrop's
+        // layout so both screens read as the same place
         drawStumps(centerX = w / 2f, baseY = h * 0.94f, scale = 1.6f)
-        // the bowler's own end at the top - this is the player's own bowler, run-up animated
-        // from the same release-timing sweep they're aiming against
+        // batting-end stumps (the target, and where length is measured toward) at the top
         drawStumps(centerX = w / 2f, baseY = h * 0.06f, scale = 1.6f)
 
-        drawBowlerFigure(centerX = w / 2f + 90f, feetY = h * 0.20f, progress = progress, scale = 1.6f)
-        drawBatterFigure(centerX = w / 2f - 100f, feetY = h * 0.90f, scale = 1.6f, shot = shot)
+        drawBowlerFigure(centerX = w / 2f + 90f, feetY = h * 0.80f, progress = progress, scale = 1.6f)
+        drawBatterFigure(centerX = w / 2f - 100f, feetY = h * 0.10f, scale = 1.6f, shot = shot)
 
         val ballY = ballTravelY(h, progress)
         drawCircle(Color(0xFFB71C1C), radius = 14f, center = Offset(w / 2f, ballY))
@@ -171,7 +175,10 @@ private fun lineFromFraction(x: Float): PitchLine = when {
 }
 
 private fun lengthFromFraction(y: Float): PitchLength = when {
-    y < 1f / 3f -> PitchLength.SHORT
+    // Batting-end stumps are at the top (small y) and the bowler's own end at the bottom
+    // (large y), so a tap near the top is the fullest length and one near the bottom the
+    // shortest.
+    y < 1f / 3f -> PitchLength.FULL_YORKER
     y < 2f / 3f -> PitchLength.GOOD_LENGTH
-    else -> PitchLength.FULL_YORKER
+    else -> PitchLength.SHORT
 }
