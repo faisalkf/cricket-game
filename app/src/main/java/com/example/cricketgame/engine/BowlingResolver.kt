@@ -1,5 +1,6 @@
 package com.example.cricketgame.engine
 
+import com.example.cricketgame.data.DeliveryTiming
 import com.example.cricketgame.data.PitchLength
 import com.example.cricketgame.data.PitchLine
 import kotlin.random.Random
@@ -7,9 +8,9 @@ import kotlin.random.Random
 data class BowlingInput(
     val targetLine: PitchLine,
     val targetLength: PitchLength,
-    val releaseTimingError: Float, // 0.0 = perfect release, 1.0 = max error (early/late vs run-up)
-    val bowlingSkill: Int,         // 1-99
-    val postPitchTilt: Float       // -1.0..1.0, applied after pitch for deviation
+    val deliveryTiming: DeliveryTiming, // where in the RED->YELLOW->GREEN->RED sweep the bowler released
+    val bowlingSkill: Int,              // 1-99
+    val postPitchTilt: Float            // -1.0..1.0, applied after pitch for deviation
 )
 
 data class BowlingOutput(
@@ -21,13 +22,23 @@ data class BowlingOutput(
 object BowlingResolver {
 
     /**
-     * Higher bowlingSkill = release timing error matters less (skilled bowlers are more
-     * forgiving of a slightly early/late release) and tilt deviation is more reliably applied
-     * in the intended direction rather than randomly.
+     * Release accuracy comes from where in the single-pass timing sweep the bowler let go
+     * (see [DeliveryTiming]) rather than a raw early/late error value:
+     *  - GREEN is the most accurate release (least drift).
+     *  - YELLOW is comfortably accurate.
+     *  - EARLY_RED (let go well before the sweep matures) drifts more - an underpowered ball.
+     *  - LATE_RED (the no-ball zone, past GREEN) is the least accurate - a rushed release.
+     * Higher bowlingSkill still makes drift less likely regardless of release timing.
      */
     fun resolve(input: BowlingInput): BowlingOutput {
         val skillFactor = input.bowlingSkill / 99.0
-        val effectiveError = input.releaseTimingError * (1.0 - skillFactor * 0.5)
+        val baseError = when (input.deliveryTiming) {
+            DeliveryTiming.GREEN -> 0.08
+            DeliveryTiming.YELLOW -> 0.25
+            DeliveryTiming.EARLY_RED -> 0.50
+            DeliveryTiming.LATE_RED -> 0.65
+        }
+        val effectiveError = baseError * (1.0 - skillFactor * 0.5)
 
         // Chance the delivery drifts off target line due to release error
         val drifted = Random.nextDouble() < effectiveError

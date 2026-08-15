@@ -15,24 +15,33 @@ import androidx.compose.ui.unit.dp
 
 /**
  * Shared match-screen visuals, kept to plain Canvas shapes (no drawables/assets) so the
- * screen builds reliably everywhere: a RED/YELLOW/GREEN/YELLOW/RED timing bar with a moving
- * needle, and a simple top-down pitch with stumps, a batter figure and a travelling ball.
+ * screen builds reliably everywhere: a colored timing bar with a moving needle (bands are
+ * caller-supplied so batting's oscillating sweep and bowling's single pass can each use their
+ * own zone layout), and a simple top-down pitch with stumps, a batter figure and a travelling
+ * ball.
  */
 
+/** One colored segment of a [TimingGauge], as a from/to fraction (0f..1f) of the bar's width. */
+data class GaugeBand(val from: Float, val to: Float, val color: Color)
+
+/** Batting's oscillating RED/YELLOW/GREEN/YELLOW/RED sweep - matches MatchViewModel.timingQualityFor. */
+val OscillatingGaugeBands = listOf(
+    GaugeBand(0f, 0.2f, Color(0xFFD32F2F)),
+    GaugeBand(0.2f, 0.35f, Color(0xFFFFC107)),
+    GaugeBand(0.35f, 0.65f, Color(0xFF4CAF50)),
+    GaugeBand(0.65f, 0.8f, Color(0xFFFFC107)),
+    GaugeBand(0.8f, 1f, Color(0xFFD32F2F))
+)
+
 @Composable
-fun TimingGauge(progress: Float, modifier: Modifier = Modifier) {
+fun TimingGauge(progress: Float, bands: List<GaugeBand> = OscillatingGaugeBands, modifier: Modifier = Modifier) {
     Canvas(modifier = modifier.fillMaxWidth().height(28.dp)) {
         val w = size.width
         val h = size.height
 
-        fun segment(from: Float, to: Float, color: Color) {
-            drawRect(color, topLeft = Offset(w * from, 0f), size = Size(w * (to - from), h))
+        bands.forEach { band ->
+            drawRect(band.color, topLeft = Offset(w * band.from, 0f), size = Size(w * (band.to - band.from), h))
         }
-        segment(0f, 0.2f, Color(0xFFD32F2F))
-        segment(0.2f, 0.35f, Color(0xFFFFC107))
-        segment(0.35f, 0.65f, Color(0xFF4CAF50))
-        segment(0.65f, 0.8f, Color(0xFFFFC107))
-        segment(0.8f, 1f, Color(0xFFD32F2F))
 
         val x = progress.coerceIn(0f, 1f) * w
         drawLine(Color.Black, Offset(x, -4f), Offset(x, h + 4f), strokeWidth = 5f)
@@ -73,47 +82,55 @@ fun PitchBackdrop(ballProgress: Float, showBall: Boolean, modifier: Modifier = M
     }
 }
 
-private fun DrawScope.drawStumps(centerX: Float, baseY: Float) {
-    val height = 34f
-    val spacing = 10f
+/** internal (not private) so BowlingControls' larger single-pitch view can reuse these at a bigger scale. */
+internal fun DrawScope.drawStumps(centerX: Float, baseY: Float, scale: Float = 1f) {
+    val height = 34f * scale
+    val spacing = 10f * scale
+    val strokeW = 4f * scale
     listOf(-spacing, 0f, spacing).forEach { dx ->
         drawLine(
             Color(0xFF3E2723),
             Offset(centerX + dx, baseY),
             Offset(centerX + dx, baseY - height),
-            strokeWidth = 4f
+            strokeWidth = strokeW
         )
     }
     drawLine(
         Color(0xFF3E2723),
-        Offset(centerX - spacing - 3f, baseY - height),
-        Offset(centerX + spacing + 3f, baseY - height),
-        strokeWidth = 4f
+        Offset(centerX - spacing - 3f * scale, baseY - height),
+        Offset(centerX + spacing + 3f * scale, baseY - height),
+        strokeWidth = strokeW
     )
 }
 
-private fun DrawScope.drawBatterFigure(centerX: Float, feetY: Float) {
-    val bodyTop = feetY - 58f
-    val bodyBottom = feetY - 14f
-    val headCenter = Offset(centerX, bodyTop - 12f)
+internal fun DrawScope.drawBatterFigure(centerX: Float, feetY: Float, scale: Float = 1f) {
+    val bodyTop = feetY - 58f * scale
+    val bodyBottom = feetY - 14f * scale
+    val headCenter = Offset(centerX, bodyTop - 12f * scale)
+    val headRadius = 12f * scale
 
     // A helmet (rather than a skin-tone head) reads clearly against both the green outfield
     // and the tan pitch regardless of exact shade - a plain skin tone nearly disappeared
     // against the pitch color here. The outline stroke guarantees contrast either way.
-    drawCircle(Color(0xFF1565C0), radius = 12f, center = headCenter)
-    drawCircle(Color(0xFF0D3C73), radius = 12f, center = headCenter, style = Stroke(width = 2f))
-    drawLine(Color.White, Offset(headCenter.x - 6f, headCenter.y + 3f), Offset(headCenter.x + 6f, headCenter.y + 3f), strokeWidth = 1.5f)
+    drawCircle(Color(0xFF1565C0), radius = headRadius, center = headCenter)
+    drawCircle(Color(0xFF0D3C73), radius = headRadius, center = headCenter, style = Stroke(width = 2f * scale))
+    drawLine(
+        Color.White,
+        Offset(headCenter.x - 6f * scale, headCenter.y + 3f * scale),
+        Offset(headCenter.x + 6f * scale, headCenter.y + 3f * scale),
+        strokeWidth = 1.5f * scale
+    )
 
-    drawLine(Color(0xFF1565C0), Offset(centerX, bodyTop), Offset(centerX, bodyBottom), strokeWidth = 14f, cap = StrokeCap.Round)
-    drawLine(Color(0xFFEEEEEE), Offset(centerX, bodyBottom), Offset(centerX - 10f, feetY), strokeWidth = 8f, cap = StrokeCap.Round)
-    drawLine(Color(0xFFEEEEEE), Offset(centerX, bodyBottom), Offset(centerX + 10f, feetY), strokeWidth = 8f, cap = StrokeCap.Round)
+    drawLine(Color(0xFF1565C0), Offset(centerX, bodyTop), Offset(centerX, bodyBottom), strokeWidth = 14f * scale, cap = StrokeCap.Round)
+    drawLine(Color(0xFFEEEEEE), Offset(centerX, bodyBottom), Offset(centerX - 10f * scale, feetY), strokeWidth = 8f * scale, cap = StrokeCap.Round)
+    drawLine(Color(0xFFEEEEEE), Offset(centerX, bodyBottom), Offset(centerX + 10f * scale, feetY), strokeWidth = 8f * scale, cap = StrokeCap.Round)
     // Bat is kept short so it doesn't reach all the way to the batting-end stumps drawn
     // separately just to the right of this figure.
     drawLine(
         Color(0xFF8D6E63),
-        Offset(centerX + 10f, bodyBottom - 6f),
-        Offset(centerX + 22f, feetY - 2f),
-        strokeWidth = 6f,
+        Offset(centerX + 10f * scale, bodyBottom - 6f * scale),
+        Offset(centerX + 22f * scale, feetY - 2f * scale),
+        strokeWidth = 6f * scale,
         cap = StrokeCap.Round
     )
 }

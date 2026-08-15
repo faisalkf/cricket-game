@@ -64,11 +64,16 @@ fun MatchScreen(
         }
         Spacer(Modifier.height(12.dp))
 
-        PitchBackdrop(
-            ballProgress = if (uiState.phase == DeliveryPhase.RUN_UP) runUp.progress else 1f,
-            showBall = uiState.phase == DeliveryPhase.RUN_UP || uiState.phase == DeliveryPhase.BALL_RESULT
-        )
-        Spacer(Modifier.height(16.dp))
+        // BowlingControls owns one large pitch view of its own while the player is bowling, so
+        // showing this smaller atmospheric one too would just be a redundant stacked pitch.
+        val showBackdrop = uiState.isPlayerBatting || uiState.phase != DeliveryPhase.RUN_UP
+        if (showBackdrop) {
+            PitchBackdrop(
+                ballProgress = if (uiState.phase == DeliveryPhase.RUN_UP) runUp.progress else 1f,
+                showBall = uiState.phase == DeliveryPhase.RUN_UP || uiState.phase == DeliveryPhase.BALL_RESULT
+            )
+            Spacer(Modifier.height(16.dp))
+        }
 
         when (uiState.phase) {
             DeliveryPhase.RUN_UP -> {
@@ -82,11 +87,10 @@ fun MatchScreen(
                 } else {
                     BowlingControls(
                         runUpProgress = runUp.progress,
-                        timingQuality = runUp.quality,
                         tiltDirection = tilt,
                         bowlerName = uiState.bowlerName,
-                        onDeliveryReleased = { line, length, error, postTilt ->
-                            viewModel.bowlDelivery(line, length, error, postTilt)
+                        onDeliveryReleased = { line, length, deliveryTiming, postTilt ->
+                            viewModel.bowlDelivery(line, length, deliveryTiming, postTilt)
                         }
                     )
                 }

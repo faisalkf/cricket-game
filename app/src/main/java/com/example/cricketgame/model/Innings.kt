@@ -16,7 +16,8 @@ class Innings(
     var wickets = 0
         private set
 
-    // legal balls bowled this innings (6 per over, v1 ignores wides/no-balls for simplicity)
+    // legal balls bowled this innings (6 per over; wides are still ignored in v1, but no-balls
+    // from a mistimed player-bowled delivery are modeled - see recordBall's legalDelivery param)
     var ballsBowled = 0
         private set
 
@@ -32,15 +33,22 @@ class Innings(
 
     val maxOversPerBowler: Int get() = maxOf(1, totalOvers / 5)
 
-    fun recordBall(result: BallResult) {
+    /**
+     * @param legalDelivery false for a no-ball: runs still count, but it doesn't consume a ball
+     * of the over (the bowler must bowl it again) and can never be a wicket (enforced by the
+     * caller - a no-ball's outcome should never be a WICKET_* by the time it gets here).
+     */
+    fun recordBall(result: BallResult, legalDelivery: Boolean = true) {
         balls.add(result)
         totalRuns += result.runsScored
-        ballsBowled++
         if (isWicket(result.outcome)) wickets++
 
-        if (ballsInCurrentOver == 0 && ballsBowled > 0) {
-            val bowlerId = result.bowler.id
-            bowlerOversUsed[bowlerId] = (bowlerOversUsed[bowlerId] ?: 0) + 1
+        if (legalDelivery) {
+            ballsBowled++
+            if (ballsInCurrentOver == 0 && ballsBowled > 0) {
+                val bowlerId = result.bowler.id
+                bowlerOversUsed[bowlerId] = (bowlerOversUsed[bowlerId] ?: 0) + 1
+            }
         }
     }
 
