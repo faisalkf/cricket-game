@@ -20,10 +20,14 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlin.math.pow
 import kotlin.random.Random
 
 /** Which sub-state the match screen is in for the current delivery. */
 enum class DeliveryPhase { RUN_UP, BALL_RESULT, INNINGS_BREAK, MATCH_OVER }
+
+/** Ease-in exponent for the bowling run-up sweep: t^POWER starts slow and accelerates into release. */
+private const val RUN_UP_EASE_POWER = 2.2f
 
 /** Slower-changing state - the scoreboard, whose turn it is, the last outcome. */
 data class MatchUiState(
@@ -236,10 +240,13 @@ class MatchViewModel(
                 // Single one-way pass per ball (see BowlingTimingZones), deliberately slower
                 // than the batting sweep below so the four RED/YELLOW/GREEN/RED zones stay
                 // readable. Loops as a sawtooth rather than folding back, so holding past the
-                // no-ball zone just starts a fresh pass instead of freezing there.
+                // no-ball zone just starts a fresh pass instead of freezing there. The run-up
+                // itself accelerates toward release, so progress is eased (t^POWER) rather than
+                // linear in time - it crawls through EARLY_RED and picks up speed into GREEN.
                 val periodMs = (3600 - currentBowler.bowlingSkill * 16).coerceIn(2200, 3600)
                 while (isActive) {
-                    val progress = (elapsed % periodMs).toFloat() / periodMs
+                    val t = (elapsed % periodMs).toFloat() / periodMs
+                    val progress = t.pow(RUN_UP_EASE_POWER)
                     _runUp.value = RunUpState(progress, timingQualityFor(progress)) // quality unused while bowling
                     delay(16)
                     elapsed += 16

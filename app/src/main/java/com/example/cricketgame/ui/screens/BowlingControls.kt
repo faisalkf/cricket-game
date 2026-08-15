@@ -80,13 +80,13 @@ fun BowlingControls(
                     )
                 }
         ) {
-            BowlingAimPitch(aimFraction = aimFraction, isHolding = isHolding)
+            BowlingAimPitch(aimFraction = aimFraction, isHolding = isHolding, liveTilt = tiltDirection)
         }
     }
 }
 
 @Composable
-private fun BowlingAimPitch(aimFraction: Offset, isHolding: Boolean) {
+private fun BowlingAimPitch(aimFraction: Offset, isHolding: Boolean, liveTilt: Float) {
     Canvas(modifier = Modifier.fillMaxSize()) {
         val w = size.width
         val h = size.height
@@ -112,11 +112,21 @@ private fun BowlingAimPitch(aimFraction: Offset, isHolding: Boolean) {
         drawBatterFigure(centerX = w / 2f - 100f, feetY = h * 0.90f, scale = 1.6f)
 
         if (isHolding) {
-            val target = Offset(aimFraction.x * w, aimFraction.y * h)
-            drawCircle(Color(0xFFB71C1C), radius = 22f, center = target)
-            drawCircle(Color.White, radius = 22f, center = target, style = Stroke(width = 4f))
-            drawLine(Color.White, Offset(target.x - 32f, target.y), Offset(target.x + 32f, target.y), strokeWidth = 2f)
-            drawLine(Color.White, Offset(target.x, target.y - 32f), Offset(target.x, target.y + 32f), strokeWidth = 2f)
+            val touchPoint = Offset(aimFraction.x * w, aimFraction.y * h)
+            // The marker is drawn offset above (and nudged sideways by live tilt) rather than
+            // right under the touch point, which otherwise hides it under the player's own
+            // finger. The nudge updates continuously while still holding - a live preview of
+            // the tilt deviation, not just something applied at release.
+            val tiltNudge = liveTilt.coerceIn(-1f, 1f) * 70f
+            val marker = Offset(
+                (touchPoint.x + tiltNudge).coerceIn(40f, w - 40f),
+                (touchPoint.y - 140f).coerceIn(40f, h - 40f)
+            )
+            drawLine(Color.White.copy(alpha = 0.55f), touchPoint, marker, strokeWidth = 2f)
+            drawCircle(Color(0xFFB71C1C), radius = 22f, center = marker)
+            drawCircle(Color.White, radius = 22f, center = marker, style = Stroke(width = 4f))
+            drawLine(Color.White, Offset(marker.x - 32f, marker.y), Offset(marker.x + 32f, marker.y), strokeWidth = 2f)
+            drawLine(Color.White, Offset(marker.x, marker.y - 32f), Offset(marker.x, marker.y + 32f), strokeWidth = 2f)
         }
     }
 }
