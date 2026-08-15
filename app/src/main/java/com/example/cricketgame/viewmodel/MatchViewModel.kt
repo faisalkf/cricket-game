@@ -262,45 +262,58 @@ class MatchViewModel(
     private fun startRunUpLoop() {
         runUpJob?.cancel()
         val playerBowling = innings.bowlingTeam.id == playerTeam.id
+        // A genuine single one-way pass per ball (see BowlingTimingZones for bowling's
+        // RED->YELLOW->GREEN->RED, timingQualityFor below for batting's symmetric five-zone
+        // read), deliberately slower while bowling so its four zones stay readable. The run-up
+        // itself accelerates toward release, so progress is eased (t^POWER) rather than linear
+        // in time. The loop below is bounded by periodMs - it does NOT wrap back to zero and
+        // sweep again while waiting; if it reaches the end with no release, resolveNoAction()
+        // auto-resolves the ball instead (see there), so a stalled player never sees the gauge
+        // repeat/oscillate and never waits indefinitely.
+        val periodMs = if (playerBowling) {
+            (3600 - currentBowler.bowlingSkill * 16).coerceIn(2200, 3600)
+        } else {
+            (1600 - currentBowler.bowlingSkill * 8).coerceIn(800, 1600)
+        }
         runUpJob = viewModelScope.launch {
             var elapsed = 0L
-            if (playerBowling) {
-                // Single one-way pass per ball (see BowlingTimingZones), deliberately slower
-                // than the batting sweep below so the four RED/YELLOW/GREEN/RED zones stay
-                // readable. Loops as a sawtooth rather than folding back, so holding past the
-                // no-ball zone just starts a fresh pass instead of freezing there. The run-up
-                // itself accelerates toward release, so progress is eased (t^POWER) rather than
-                // linear in time - it crawls through EARLY_RED and picks up speed into GREEN.
-                val periodMs = (3600 - currentBowler.bowlingSkill * 16).coerceIn(2200, 3600)
-                while (isActive) {
-                    val progress = easedSweep(elapsed, periodMs)
-                    val ballProgress = easedSweep(elapsed, BALL_FLIGHT_SWEEP_MS)
-                    _runUp.value = RunUpState(progress, timingQualityFor(progress), ballProgress) // quality unused while bowling
-                    delay(16)
-                    elapsed += 16
-                }
-            } else {
-                // Single one-way pass per ball, same shape as bowling: RED -> YELLOW -> GREEN ->
-                // YELLOW -> RED describes how the incoming ball should be read as it approaches
-                // the batsman, not a repeating oscillation - it sweeps once (eased, same as
-                // bowling's run-up) and snaps back to start the next ball's read from scratch.
-                val periodMs = (1600 - currentBowler.bowlingSkill * 8).coerceIn(800, 1600)
-                while (isActive) {
-                    val progress = easedSweep(elapsed, periodMs)
-                    val ballProgress = easedSweep(elapsed, BALL_FLIGHT_SWEEP_MS)
-                    _runUp.value = RunUpState(progress, timingQualityFor(progress), ballProgress)
-                    delay(16)
-                    elapsed += 16
-                }
+            while (isActive && elapsed < periodMs) {
+                val progress = easedSweep(elapsed, periodMs)
+                val ballProgress = easedSweep(elapsed, BALL_FLIGHT_SWEEP_MS) // quality unused while bowling
+                _runUp.value = RunUpState(progress, timingQualityFor(progress), ballProgress)
+                delay(16)
+                elapsed += 16
             }
+            if (isActive) resolveNoAction(playerBowling)
         }
     }
 
-    /** One eased one-way sweep (t^[RUN_UP_EASE_POWER]) of [periodMs], sampled at [elapsed] ms -
-     *  shared shape for the timing gauge and the (independently paced) ball-travel visuals. */
-    private fun easedSweep(elapsed: Long, periodMs: Int): Float {
-        val t = (elapsed % periodMs).toFloat() / periodMs
+    /** One eased one-way sweep (t^[RUN_UP_EASE_POWER]) of [durationMs], sampled at [elapsed] ms
+     *  and clamped (not wrapped) at 1f once elapsed passes durationMs - shared shape for the
+     *  timing gauge (whose own loop is bounded by its periodMs, so it never reaches the clamp)
+     *  and the independently-paced ball-travel visuals (whose fixed duration can be shorter than
+     *  the gauge's, so it holds at the far end rather than restarting mid run-up). */
+    private fun easedSweep(elapsed: Long, durationMs: Int): Float {
+        val t = (elapsed.toFloat() / durationMs).coerceIn(0f, 1f)
         return t.pow(RUN_UP_EASE_POWER)
+    }
+
+    /**
+     * Called when the run-up sweep reaches its natural end with no release from the player -
+     * resolves the ball through the exact same paths as a manual release right at the end of
+     * the sweep (so the outcome overlay and auto-advance to the next ball are identical either
+     * way): a miss while batting - OUT if the delivery was on the stumps, otherwise a dot ball,
+     * same as any RED-zone release (see BattingResolver) - or a no-ball while bowling, same as
+     * a LATE_RED release (automatic +1 run, doesn't consume a ball of the over, same bowler
+     * re-bowls). Either way the ball is always resolved; the sweep never repeats or stalls.
+     */
+    private fun resolveNoAction(playerBowling: Boolean) {
+        _runUp.update { it.copy(progress = 1f, quality = TimingQuality.RED) }
+        if (playerBowling) {
+            bowlDelivery(PitchLine.ON_STUMPS, PitchLength.GOOD_LENGTH, DeliveryTiming.LATE_RED, 0f)
+        } else {
+            playBattingShot(Aggression.DEFENSIVE, 0f)
+        }
     }
 
     /**
