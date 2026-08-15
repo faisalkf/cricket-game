@@ -16,16 +16,15 @@ import androidx.compose.ui.unit.dp
 /**
  * Shared match-screen visuals, kept to plain Canvas shapes (no drawables/assets) so the
  * screen builds reliably everywhere: a colored timing bar with a moving needle (bands are
- * caller-supplied so batting's oscillating sweep and bowling's single pass can each use their
- * own zone layout), and a simple top-down pitch with stumps, a batter figure and a travelling
- * ball.
+ * caller-supplied so batting's 5-zone sweep and bowling's 4-zone sweep can each use their own
+ * zone layout), and a simple top-down pitch with stumps, a batter figure and a travelling ball.
  */
 
 /** One colored segment of a [TimingGauge], as a from/to fraction (0f..1f) of the bar's width. */
 data class GaugeBand(val from: Float, val to: Float, val color: Color)
 
-/** Batting's oscillating RED/YELLOW/GREEN/YELLOW/RED sweep - matches MatchViewModel.timingQualityFor. */
-val OscillatingGaugeBands = listOf(
+/** Batting's symmetric RED/YELLOW/GREEN/YELLOW/RED sweep - matches MatchViewModel.timingQualityFor. */
+val BattingGaugeBands = listOf(
     GaugeBand(0f, 0.2f, Color(0xFFD32F2F)),
     GaugeBand(0.2f, 0.35f, Color(0xFFFFC107)),
     GaugeBand(0.35f, 0.65f, Color(0xFF4CAF50)),
@@ -34,7 +33,7 @@ val OscillatingGaugeBands = listOf(
 )
 
 @Composable
-fun TimingGauge(progress: Float, bands: List<GaugeBand> = OscillatingGaugeBands, modifier: Modifier = Modifier) {
+fun TimingGauge(progress: Float, bands: List<GaugeBand> = BattingGaugeBands, modifier: Modifier = Modifier) {
     Canvas(modifier = modifier.fillMaxWidth().height(28.dp)) {
         val w = size.width
         val h = size.height
@@ -50,34 +49,41 @@ fun TimingGauge(progress: Float, bands: List<GaugeBand> = OscillatingGaugeBands,
     }
 }
 
+/**
+ * The batting-side pitch, deliberately matching BowlingControls' BowlingAimPitch in size and
+ * proportions (same 500dp height, same 0.30-0.70 pitch strip, same stump margins and 1.6x
+ * figure scale) so the two screens read as the same place rather than two differently-scaled
+ * pitches. It has no aim target since batting isn't tap-to-aim, but does animate the ball
+ * travelling down the pitch as the delivery is bowled.
+ */
 @Composable
 fun PitchBackdrop(ballProgress: Float, showBall: Boolean, modifier: Modifier = Modifier) {
-    Canvas(modifier = modifier.fillMaxWidth().height(220.dp)) {
+    Canvas(modifier = modifier.fillMaxWidth().height(500.dp)) {
         val w = size.width
         val h = size.height
 
         drawRect(Color(0xFF3F7D3F), size = Size(w, h)) // outfield
 
-        val stripLeft = w * 0.38f
-        val stripRight = w * 0.62f
+        val stripLeft = w * 0.30f
+        val stripRight = w * 0.70f
         drawRect(
             Color(0xFFD9B876),
             topLeft = Offset(stripLeft, 0f),
             size = Size(stripRight - stripLeft, h)
         ) // pitch
 
-        drawLine(Color.White, Offset(stripLeft, h * 0.12f), Offset(stripRight, h * 0.12f), strokeWidth = 3f)
-        drawLine(Color.White, Offset(stripLeft, h * 0.88f), Offset(stripRight, h * 0.88f), strokeWidth = 3f)
+        drawLine(Color.White, Offset(stripLeft, h * 0.06f), Offset(stripRight, h * 0.06f), strokeWidth = 3f)
+        drawLine(Color.White, Offset(stripLeft, h * 0.94f), Offset(stripRight, h * 0.94f), strokeWidth = 3f)
 
-        drawStumps(centerX = w / 2f, baseY = h * 0.10f)
-        drawStumps(centerX = w / 2f, baseY = h * 0.92f)
+        drawStumps(centerX = w / 2f, baseY = h * 0.06f, scale = 1.6f)
+        drawStumps(centerX = w / 2f, baseY = h * 0.94f, scale = 1.6f)
 
-        drawBatterFigure(centerX = w / 2f - 62f, feetY = h * 0.87f)
+        drawBatterFigure(centerX = w / 2f - 100f, feetY = h * 0.90f, scale = 1.6f)
 
         if (showBall) {
-            val ballY = h * (0.14f + 0.72f * ballProgress.coerceIn(0f, 1f))
-            drawCircle(Color(0xFFB71C1C), radius = 9f, center = Offset(w / 2f, ballY))
-            drawCircle(Color.White, radius = 9f, center = Offset(w / 2f, ballY), style = Stroke(width = 1.5f))
+            val ballY = h * (0.10f + 0.80f * ballProgress.coerceIn(0f, 1f))
+            drawCircle(Color(0xFFB71C1C), radius = 14f, center = Offset(w / 2f, ballY))
+            drawCircle(Color.White, radius = 14f, center = Offset(w / 2f, ballY), style = Stroke(width = 2f))
         }
     }
 }

@@ -26,7 +26,7 @@ import kotlin.random.Random
 /** Which sub-state the match screen is in for the current delivery. */
 enum class DeliveryPhase { RUN_UP, BALL_RESULT, INNINGS_BREAK, MATCH_OVER }
 
-/** Ease-in exponent for the bowling run-up sweep: t^POWER starts slow and accelerates into release. */
+/** Ease-in exponent for both sweeps: t^POWER starts slow and accelerates toward release/GREEN. */
 private const val RUN_UP_EASE_POWER = 2.2f
 
 /** Slower-changing state - the scoreboard, whose turn it is, the last outcome. */
@@ -53,17 +53,19 @@ data class MatchUiState(
  * gauge/ball animation can recompose on their own without redrawing the whole scoreboard.
  */
 data class RunUpState(
-    val progress: Float = 0f,       // 0f..1f, one full RED->GREEN->RED sweep per delivery
+    val progress: Float = 0f,       // 0f..1f, one eased one-way sweep per delivery
     val quality: TimingQuality = TimingQuality.RED
 )
 
 /**
- * Drives a real ball-by-ball match: a bowler run-up timer that sweeps the timing indicator
- * RED -> YELLOW -> GREEN -> YELLOW -> RED (oscillating) while batting, and RED -> YELLOW ->
- * GREEN -> RED (single, slower pass - see [com.example.cricketgame.data.BowlingTimingZones])
- * while bowling, where a late release (past GREEN, no yellow buffer) is a no-ball. Batting is
- * an aggression-slider release timed against its sweep; bowling is press-and-hold pitch
- * targeting where release timing sets delivery quality and tilt nudges the aim.
+ * Drives a real ball-by-ball match: a bowler run-up timer that sweeps the timing indicator once
+ * per ball, accelerating toward release (progress eased as t^[RUN_UP_EASE_POWER]) rather than at
+ * constant speed - RED -> YELLOW -> GREEN -> YELLOW -> RED while batting (how the incoming ball
+ * should be read as it arrives), and RED -> YELLOW -> GREEN -> RED while bowling (see
+ * [com.example.cricketgame.data.BowlingTimingZones]), where a late release (past GREEN, no
+ * yellow buffer) is a no-ball. Batting is an aggression-slider release timed against its sweep;
+ * bowling is press-and-hold pitch targeting where release timing sets delivery quality and tilt
+ * nudges the aim.
  *
  * v1 simplification (matches the rest of the engine layer): only a single "current batsman" is
  * tracked per side rather than a striker/non-striker pair - no strike rotation on odd runs.
@@ -252,10 +254,14 @@ class MatchViewModel(
                     elapsed += 16
                 }
             } else {
+                // Single one-way pass per ball, same shape as bowling: RED -> YELLOW -> GREEN ->
+                // YELLOW -> RED describes how the incoming ball should be read as it approaches
+                // the batsman, not a repeating oscillation - it sweeps once (eased, same as
+                // bowling's run-up) and snaps back to start the next ball's read from scratch.
                 val periodMs = (1600 - currentBowler.bowlingSkill * 8).coerceIn(800, 1600)
                 while (isActive) {
-                    val phase = (elapsed % periodMs).toFloat() / periodMs
-                    val progress = if (phase < 0.5f) phase * 2f else (1f - phase) * 2f
+                    val t = (elapsed % periodMs).toFloat() / periodMs
+                    val progress = t.pow(RUN_UP_EASE_POWER)
                     _runUp.value = RunUpState(progress, timingQualityFor(progress))
                     delay(16)
                     elapsed += 16
