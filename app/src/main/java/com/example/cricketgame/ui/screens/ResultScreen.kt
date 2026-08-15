@@ -9,13 +9,15 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 
 @Composable
-fun ResultScreen(onPlayAgain: () -> Unit) {
+fun ResultScreen(result: String, onPlayAgain: () -> Unit) {
     Column(
         modifier = Modifier.fillMaxSize().padding(24.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
-        Text("Match Result") // TODO: pass real Match.result string through
+        Text("Match Result")
+        Spacer(Modifier.height(8.dp))
+        Text(result.ifBlank { "Match complete" })
         Spacer(Modifier.height(16.dp))
         Button(onClick = onPlayAgain) {
             Text("Play Again")

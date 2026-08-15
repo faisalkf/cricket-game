@@ -1,43 +1,105 @@
 package com.example.cricketgame.ui.screens
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
-import com.example.cricketgame.data.TimingQuality
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
+import com.example.cricketgame.data.MatchFormat
+import com.example.cricketgame.data.Team
+import com.example.cricketgame.data.TossChoice
+import com.example.cricketgame.sensor.TiltSensorController
+import com.example.cricketgame.viewmodel.DeliveryPhase
+import com.example.cricketgame.viewmodel.MatchViewModel
 
 /**
- * v1 placeholder match screen. Wires together:
- *  - a scoreboard header (score / wickets / overs)
- *  - BattingControls when the player is batting
- *  - BowlingControls when the player is bowling manually
- *  - a simplified CPU-innings ball-by-ball readout otherwise (per design doc section 6)
- *
- * TODO: connect this to a real MatchViewModel that holds the Match/Innings state, drives the
- * bowler run-up animation (and derives the live RED/YELLOW/GREEN timing indicator from it),
- * and calls BattingResolver / BowlingResolver / CpuInningsSimulator to advance the game.
+ * Real match screen, driven by [MatchViewModel]:
+ *  - a scoreboard header (score / wickets / overs / target)
+ *  - BattingControls when the player's team is batting
+ *  - BowlingControls when the player's team is bowling
+ *  - a brief outcome readout between deliveries, and innings-break / match-over states
  */
 @Composable
-fun MatchScreen(onMatchComplete: () -> Unit) {
-    // Placeholder local state standing in for the real ViewModel-driven state.
-    var score by remember { mutableStateOf(0) }
-    var wickets by remember { mutableStateOf(0) }
-    var overs by remember { mutableStateOf("0.0") }
+fun MatchScreen(
+    format: MatchFormat,
+    playerTeam: Team,
+    cpuTeam: Team,
+    tossWinnerIsPlayer: Boolean,
+    tossChoice: TossChoice?,
+    onMatchComplete: (result: String) -> Unit
+) {
+    val viewModel: MatchViewModel = viewModel(
+        factory = MatchViewModel.factory(format, playerTeam, cpuTeam, tossWinnerIsPlayer, tossChoice)
+    )
+
+    val context = LocalContext.current
+    val tiltController = remember { TiltSensorController(context) }
+    DisposableEffect(Unit) {
+        tiltController.start()
+        onDispose { tiltController.stop() }
+    }
+    val tilt by tiltController.tilt.collectAsState()
+
+    val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val runUp by viewModel.runUp.collectAsStateWithLifecycle()
+
+    // Fire the nav callback once, exactly when the ViewModel decides the match is over.
+    LaunchedEffect(uiState.matchResult) {
+        uiState.matchResult?.let { onMatchComplete(it) }
+    }
 
     Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
-        Text("Score: $score / $wickets   Overs: $overs", style = androidx.compose.material3.MaterialTheme.typography.titleMedium)
-        Spacer(Modifier.height(24.dp))
-
-        // Example wiring for the batting turn - swap for bowling/CPU state as appropriate.
-        BattingControls(
-            timingIndicator = TimingQuality.GREEN, // TODO: drive from run-up animation timer
-            tiltDirection = 0f,                    // TODO: drive from SensorManager
-            onPlayShot = { aggression, timing ->
-                // TODO: call BattingResolver.resolve(...) with real batsman/onStumps/fieldMode
-                // and update score/wickets/overs from the returned outcome.
-                score += 1
-            }
+        val targetSuffix = uiState.target?.let { "   Target: $it" } ?: ""
+        Text(
+            "${uiState.battingTeamName} ${uiState.score}/${uiState.wickets}   Overs: ${uiState.oversText}$targetSuffix",
+            style = MaterialTheme.typography.titleMedium
         )
+        Text("${uiState.bowlerName} to ${uiState.strikerName}", style = MaterialTheme.typography.bodyMedium)
+        if (uiState.recentBalls.isNotEmpty()) {
+            Text("This over: ${uiState.recentBalls.joinToString(" ")}")
+        }
+        Spacer(Modifier.height(12.dp))
+
+        PitchBackdrop(
+            ballProgress = if (uiState.phase == DeliveryPhase.RUN_UP) runUp.progress else 1f,
+            showBall = uiState.phase == DeliveryPhase.RUN_UP || uiState.phase == DeliveryPhase.BALL_RESULT
+        )
+        Spacer(Modifier.height(16.dp))
+
+        when (uiState.phase) {
+            DeliveryPhase.RUN_UP -> {
+                if (uiState.isPlayerBatting) {
+                    BattingControls(
+                        runUpProgress = runUp.progress,
+                        timingIndicator = runUp.quality,
+                        tiltDirection = tilt,
+                        onPlayShot = { aggression -> viewModel.playBattingShot(aggression, tilt) }
+                    )
+                } else {
+                    BowlingControls(
+                        runUpProgress = runUp.progress,
+                        timingQuality = runUp.quality,
+                        tiltDirection = tilt,
+                        bowlerName = uiState.bowlerName,
+                        onDeliveryReleased = { line, length, error, postTilt ->
+                            viewModel.bowlDelivery(line, length, error, postTilt)
+                        }
+                    )
+                }
+            }
+            DeliveryPhase.BALL_RESULT -> {
+                Text(uiState.lastBallSummary ?: "", style = MaterialTheme.typography.headlineSmall)
+            }
+            DeliveryPhase.INNINGS_BREAK -> {
+                Text("Innings break", style = MaterialTheme.typography.headlineSmall)
+            }
+            DeliveryPhase.MATCH_OVER -> {
+                Text(uiState.matchResult ?: "Match complete", style = MaterialTheme.typography.headlineSmall)
+            }
+        }
     }
 }

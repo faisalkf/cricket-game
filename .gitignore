@@ -1,0 +1,17 @@
+# Local environment
+local.properties
+
+# Build output
+build/
+app/build/
+.gradle/
+
+# Gradle wrapper - CI (.github/workflows/build-apk.yml) generates this on demand if missing
+gradlew
+gradlew.bat
+gradle/wrapper/
+
+# IDE
+.idea/
+*.iml
+.DS_Store

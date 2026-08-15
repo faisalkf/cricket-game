@@ -5,7 +5,6 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import com.example.cricketgame.data.Aggression
 import com.example.cricketgame.data.TimingQuality
@@ -14,45 +13,38 @@ import com.example.cricketgame.data.TimingQuality
  * v1 batting control surface.
  *
  * - Slider position (0f..1f) maps to Aggression: <0.33 Defensive, 0.33-0.66 Ground, >0.66 Aerial.
- * - "Release" (onPlayShot) captures the slider position at release time AND asks the timing
- *   engine (driven by a separate countdown/animation tied to the bowler's run-up - not shown
- *   here) what TimingQuality that release corresponds to.
- * - Device tilt (direction) is read separately via SensorManager (TODO: wire up
- *   android.hardware.SensorEventListener / TYPE_ROTATION_VECTOR or TYPE_ACCELEROMETER and feed
- *   the resulting -1f..1f value in as `tiltDirection`).
+ * - "Release" (lifting the slider thumb, onValueChangeFinished) is the shot. The MatchViewModel
+ *   compares the moment of release against its own live run-up sweep to get TimingQuality, so
+ *   this composable only needs to report the chosen aggression.
+ * - Device tilt is read via TiltSensorController upstream and passed in as `tiltDirection`
+ *   purely for display here (the caller already has the live value to hand to the ViewModel).
  *
  * This composable is intentionally UI-only; BattingResolver.resolve() does the actual scoring.
  */
 @Composable
 fun BattingControls(
-    timingIndicator: TimingQuality?, // updated externally as the bowler approaches release
+    runUpProgress: Float,
+    timingIndicator: TimingQuality,
     tiltDirection: Float,
-    onPlayShot: (aggression: Aggression, timing: TimingQuality) -> Unit
+    onPlayShot: (aggression: Aggression) -> Unit
 ) {
     var sliderPosition by remember { mutableStateOf(0.5f) }
-
-    val indicatorColor = when (timingIndicator) {
-        TimingQuality.RED -> Color.Red
-        TimingQuality.YELLOW -> Color(0xFFFFC107)
-        TimingQuality.GREEN -> Color(0xFF4CAF50)
-        null -> Color.Gray
-    }
 
     Column(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
         Text("Tilt: ${"%.2f".format(tiltDirection)}  (left = leg side, right = off side)")
         Spacer(Modifier.height(8.dp))
 
-        Text("Timing", color = indicatorColor)
+        Text("Timing: ${timingIndicator.name} - release the slider on GREEN")
         Spacer(Modifier.height(4.dp))
+        TimingGauge(progress = runUpProgress)
+        Spacer(Modifier.height(12.dp))
 
         Text(aggressionLabel(sliderPosition))
         Slider(
             value = sliderPosition,
             onValueChange = { sliderPosition = it },
             onValueChangeFinished = {
-                val aggression = sliderToAggression(sliderPosition)
-                val timing = timingIndicator ?: TimingQuality.RED
-                onPlayShot(aggression, timing)
+                onPlayShot(sliderToAggression(sliderPosition))
             }
         )
     }
