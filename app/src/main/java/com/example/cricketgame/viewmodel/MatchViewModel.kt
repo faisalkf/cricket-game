@@ -53,7 +53,9 @@ data class MatchUiState(
     // null whenever there's no delivery to show yet (see MatchScreen/BatterShot).
     val lastBallAggression: Aggression? = null,
     val lastBallTimingQuality: TimingQuality? = null,
-    val lastBallTiltDirection: Float = 0f,
+    // The unified slider's release position for the just-played delivery: shot direction while
+    // batting, line/curve-bias while bowling - see MatchScreen/BatterShot.
+    val lastBallDirection: Float = 0f,
     val lastBallRuns: Int = 0,
     // Whether the just-played delivery was on the stumps - drives the missed-ball visual (stumps
     // broken vs. stopped at the batsman, see BatterShot/MatchVisuals) exactly like it already
@@ -95,9 +97,14 @@ data class RunUpState(
  * constant speed - RED -> YELLOW -> GREEN -> YELLOW -> RED while batting (how the incoming ball
  * should be read as it arrives), and RED -> YELLOW -> GREEN -> RED while bowling (see
  * [com.example.cricketgame.data.BowlingTimingZones]), where a late release (past GREEN, no
- * yellow buffer) is a no-ball. Batting is an aggression-slider release timed against its sweep;
- * bowling is press-and-hold pitch targeting where release timing sets delivery quality and tilt
- * nudges the aim.
+ * yellow buffer) is a no-ball. Both batting and bowling share one unified control: a single
+ * horizontal slider, dragged throughout the run-up and released at the player's chosen moment.
+ * The slider's left-right position AT RELEASE sets direction (shot direction while batting, line
+ * while bowling); the release TIMING against the sweep above sets outcome quality - batting's
+ * GREEN zone further splits into a LIGHT ground-shot tier and a thin DARK six tier by how close to
+ * dead-center the release landed (see [com.example.cricketgame.data.BattingTimingZones]),
+ * bowling's GREEN likewise splits into a standard best-ball tier and a tougher "perfect ball" tier
+ * (see [com.example.cricketgame.data.GreenTier]).
  *
  * v1 simplification (matches the rest of the engine layer): only a single "current batsman" is
  * tracked per side rather than a striker/non-striker pair - no strike rotation on odd runs.
@@ -152,10 +159,17 @@ class MatchViewModel(
         startDelivery()
     }
 
-    /** Called by BattingControls when the player releases the aggression slider. */
-    fun playBattingShot(aggression: Aggression, tiltDirection: Float) {
+    /**
+     * Called by BattingControls when the player releases the unified slider. [direction] is the
+     * slider's left-right position at that instant (-1f leg side .. +1f off side) - the shot's
+     * direction. Aggression is no longer chosen separately; it's fully implied by how the release
+     * landed against the sweep (see [battingAggressionFor]).
+     */
+    fun playBattingShot(direction: Float) {
         if (_uiState.value.phase != DeliveryPhase.RUN_UP) return
+        val progress = _runUp.value.progress
         val timing = _runUp.value.quality
+        val aggression = battingAggressionFor(timing, progress)
         finishBallFlight()
         val striker = currentStriker
         val fieldMode = currentFieldMode()
@@ -172,7 +186,7 @@ class MatchViewModel(
                 bowler = currentBowler,
                 timingQuality = timing,
                 aggression = aggression,
-                tiltDirection = tiltDirection,
+                direction = direction,
                 pitchLine = cpuDeliveryLine,
                 pitchLength = cpuDeliveryLength,
                 onStumps = cpuDeliveryOnStumps,
@@ -184,37 +198,61 @@ class MatchViewModel(
     }
 
     /**
-     * Called by BowlingControls when the player releases their press-and-hold delivery.
-     * [deliveryTiming] is where in the single-pass RED->YELLOW->GREEN->RED sweep the release
-     * landed (see [BowlingTimingZones]): EARLY_RED is a weak/short ball (easy pickings for an
-     * aggressive, well-timed batsman), YELLOW is comfortably scoreable, GREEN is the hardest to
-     * score off, and LATE_RED is a no-ball - the batting team gets an automatic run and it
-     * doesn't count as a legal ball, but the rushed release makes it the hardest of all four to
-     * add extra runs against (and it can never dismiss the batsman).
+     * Maps a batting release's timing against the sweep to the aggression tier that drives both
+     * BattingResolver's outcome odds and the shot's trajectory shape (see MatchVisuals -
+     * unchanged from the old player-chosen aggression's behavior, just now selected by timing
+     * precision instead of a separate slider choice): YELLOW is always the safe/defensive tier;
+     * GREEN splits by [BattingTimingZones.greenTier] into the broad ground-shot tier (LIGHT) and
+     * a thin, dead-center six tier (DARK). RED's aggression value is never actually read -
+     * BattingResolver's RED branch resolves the miss before aggression comes into it - so
+     * DEFENSIVE here is just an inert placeholder.
      */
-    fun bowlDelivery(
-        targetLine: PitchLine,
-        targetLength: PitchLength,
-        deliveryTiming: DeliveryTiming,
-        postPitchTilt: Float
-    ) {
+    private fun battingAggressionFor(timing: TimingQuality, progress: Float): Aggression = when (timing) {
+        TimingQuality.RED -> Aggression.DEFENSIVE
+        TimingQuality.YELLOW -> Aggression.DEFENSIVE
+        TimingQuality.GREEN -> when (BattingTimingZones.greenTier(progress)) {
+            GreenTier.DARK -> Aggression.AERIAL
+            GreenTier.LIGHT -> Aggression.GROUND
+        }
+    }
+
+    /**
+     * Called by BowlingControls when the player releases the unified slider. [direction] is the
+     * slider's left-right position at that instant (-1f leg side .. +1f off side), driving both
+     * the target line (see [lineFromDirection]) and the post-pitch curve bias, replacing the old
+     * separate tap-target-line + accelerometer-tilt inputs with one value. [deliveryTiming] is
+     * where in the single-pass RED->YELLOW->GREEN->RED sweep the release landed (see
+     * [BowlingTimingZones]): EARLY_RED is a weak/short ball (easy pickings for an aggressive,
+     * well-timed batsman), YELLOW is comfortably scoreable, GREEN is the hardest to score off -
+     * split by [BowlingTimingZones.greenTier] into the bowler's standard best ball (LIGHT) and an
+     * even tougher, thin-sliver "perfect ball" tier (DARK) - and LATE_RED is a no-ball: the
+     * batting team gets an automatic run and it doesn't count as a legal ball, but the rushed
+     * release makes it the hardest of all to add extra runs against (and it can never dismiss the
+     * batsman). Length is no longer player-chosen (the old 2D pitch-tap is gone) - the bowler
+     * always aims for a good length, and only release accuracy (same as before) can knock it off
+     * that per BowlingResolver's existing drift chance.
+     */
+    fun bowlDelivery(direction: Float, deliveryTiming: DeliveryTiming) {
         if (_uiState.value.phase != DeliveryPhase.RUN_UP) return
 
         val bowler = currentBowler
+        val progress = _runUp.value.progress
+        val greenTier = if (deliveryTiming == DeliveryTiming.GREEN) BowlingTimingZones.greenTier(progress) else null
+        val targetLine = lineFromDirection(direction)
         val output = BowlingResolver.resolve(
-            BowlingInput(targetLine, targetLength, deliveryTiming, bowler.bowlingSkill, postPitchTilt)
+            BowlingInput(targetLine, PitchLength.GOOD_LENGTH, deliveryTiming, bowler.bowlingSkill, direction, greenTier)
         )
-        // Lock in this delivery's actual pitch length and the tilt sampled at release - the same
-        // postPitchTilt BowlingResolver just used for line/length drift - before easing the
+        // Lock in this delivery's actual pitch length and the direction sampled at release - the
+        // same value BowlingResolver just used for line/length drift - before easing the
         // remaining flight to completion, so the post-pitch curve (see ballTravelX) bends the
         // right way for the whole catch-up animation rather than only starting to apply mid-way.
-        _runUp.update { it.copy(pitchLength = output.actualLength, postPitchTilt = postPitchTilt) }
+        _runUp.update { it.copy(pitchLength = output.actualLength, postPitchTilt = direction) }
         finishBallFlight()
 
         // CPU batsman's approach is rolled now, biased by skill and by how good the release was.
         val batsman = currentStriker
         val skillFactor = batsman.battingSkill / 99.0
-        val timing = rollCpuBattingTiming(skillFactor, deliveryTiming)
+        val timing = rollCpuBattingTiming(skillFactor, deliveryTiming, greenTier)
         val aggression = rollCpuAggression(skillFactor)
         val fieldMode = currentFieldMode()
         val (rawOutcome, rawRuns) = BattingResolver.resolve(batsman.battingSkill, timing, aggression, output.onStumps, fieldMode)
@@ -231,7 +269,7 @@ class MatchViewModel(
                 bowler = bowler,
                 timingQuality = timing,
                 aggression = aggression,
-                tiltDirection = postPitchTilt,
+                direction = direction,
                 pitchLine = output.actualLine,
                 pitchLength = output.actualLength,
                 onStumps = output.onStumps,
@@ -241,6 +279,14 @@ class MatchViewModel(
             ),
             legalDelivery = !isNoBall
         )
+    }
+
+    /** Maps the unified slider's release position to a target line - the same thirds split the
+     *  old 2D pitch-tap's X-axis used, just fed from -1f..1f instead of a 0f..1f tap fraction. */
+    private fun lineFromDirection(direction: Float): PitchLine = when {
+        direction < -1f / 3f -> PitchLine.OUTSIDE_LEG
+        direction > 1f / 3f -> PitchLine.OUTSIDE_OFF
+        else -> PitchLine.ON_STUMPS
     }
 
     // --- delivery setup -----------------------------------------------------------------
@@ -276,7 +322,7 @@ class MatchViewModel(
                 lastBallSummary = null,
                 lastBallAggression = null,
                 lastBallTimingQuality = null,
-                lastBallTiltDirection = 0f,
+                lastBallDirection = 0f,
                 lastBallRuns = 0
             )
         }
@@ -332,9 +378,9 @@ class MatchViewModel(
     private fun resolveNoAction(playerBowling: Boolean) {
         _runUp.update { it.copy(progress = 1f, quality = TimingQuality.RED) }
         if (playerBowling) {
-            bowlDelivery(PitchLine.ON_STUMPS, PitchLength.GOOD_LENGTH, DeliveryTiming.LATE_RED, 0f)
+            bowlDelivery(0f, DeliveryTiming.LATE_RED)
         } else {
-            playBattingShot(Aggression.DEFENSIVE, 0f)
+            playBattingShot(0f)
         }
     }
 
@@ -362,11 +408,7 @@ class MatchViewModel(
         }
     }
 
-    private fun timingQualityFor(progress: Float): TimingQuality = when {
-        progress < 0.2f || progress > 0.8f -> TimingQuality.RED
-        progress < 0.35f || progress > 0.65f -> TimingQuality.YELLOW
-        else -> TimingQuality.GREEN
-    }
+    private fun timingQualityFor(progress: Float): TimingQuality = BattingTimingZones.classify(progress)
 
     // --- CPU auto-roll helpers (used for whichever side isn't the player this ball) --------
 
@@ -405,19 +447,25 @@ class MatchViewModel(
      * Biases the CPU batsman's own shot-timing roll by how good the player's delivery release
      * was: a weak EARLY_RED ball is easy to time well (high GREEN chance), a well-released GREEN
      * ball is the hardest to time, and a rushed LATE_RED no-ball is hardest of all - even though
-     * the batting team banks the automatic run regardless of how this roll comes out.
+     * the batting team banks the automatic run regardless of how this roll comes out. A DARK-tier
+     * "perfect ball" (see [greenTier]) claws a further chunk of probability from GREEN back into
+     * RED on top of GREEN's own base odds - noticeably harder to score off than a standard LIGHT
+     * green ball, and since RED+onStumps is already a wicket via BattingResolver, this is also
+     * where the perfect ball's modestly elevated wicket chance comes from, with no separate wicket
+     * mechanic needed.
      */
-    private fun rollCpuBattingTiming(skillFactor: Double, deliveryTiming: DeliveryTiming): TimingQuality {
+    private fun rollCpuBattingTiming(skillFactor: Double, deliveryTiming: DeliveryTiming, greenTier: GreenTier?): TimingQuality {
         val (baseRed, baseYellow, baseGreen) = when (deliveryTiming) {
             DeliveryTiming.EARLY_RED -> Triple(0.10, 0.25, 0.65)
             DeliveryTiming.YELLOW -> Triple(0.20, 0.45, 0.35)
             DeliveryTiming.GREEN -> Triple(0.45, 0.35, 0.20)
             DeliveryTiming.LATE_RED -> Triple(0.60, 0.28, 0.12)
         }
+        val tierShift = if (deliveryTiming == DeliveryTiming.GREEN && greenTier == GreenTier.DARK) 0.18 else 0.0
         // stronger batsmen claw a little probability back from RED into GREEN
         val skillShift = skillFactor * 0.15
-        val pRed = (baseRed - skillShift).coerceAtLeast(0.03)
-        val pGreen = baseGreen + skillShift
+        val pRed = (baseRed + tierShift - skillShift).coerceAtLeast(0.03)
+        val pGreen = (baseGreen - tierShift + skillShift).coerceAtLeast(0.03)
         val pYellow = baseYellow
         val roll = Random.nextDouble() * (pRed + pYellow + pGreen)
         return when {
@@ -491,7 +539,7 @@ class MatchViewModel(
                 lastBallSummary = summaryFor(result, legalDelivery),
                 lastBallAggression = result.aggression,
                 lastBallTimingQuality = result.timingQuality,
-                lastBallTiltDirection = result.tiltDirection,
+                lastBallDirection = result.direction,
                 lastBallRuns = result.runsScored,
                 lastBallOnStumps = result.onStumps,
                 recentBalls = currentOverCodes.toList(),

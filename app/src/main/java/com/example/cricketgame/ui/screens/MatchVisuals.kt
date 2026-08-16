@@ -23,6 +23,7 @@ import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.unit.dp
 import com.example.cricketgame.data.Aggression
+import com.example.cricketgame.data.BattingTimingZones
 import com.example.cricketgame.data.PitchLength
 import com.example.cricketgame.data.TimingQuality
 import kotlinx.coroutines.delay
@@ -43,25 +44,34 @@ import kotlin.math.sin
 /** One colored segment of a [TimingGauge], as a from/to fraction (0f..1f) of the bar's width. */
 data class GaugeBand(val from: Float, val to: Float, val color: Color)
 
-/** Batting's symmetric RED/YELLOW/GREEN/YELLOW/RED sweep - matches MatchViewModel.timingQualityFor. */
+/** Batting's symmetric RED/YELLOW/GREEN/YELLOW/RED sweep - matches BattingTimingZones.classify,
+ *  with a bright sliver dropped in the middle of GREEN marking BattingTimingZones' DARK "six
+ *  tier" (drawn after/on top of the GREEN band it sits inside, so it isn't just painted over) -
+ *  otherwise that tier would be an invisible, unaimable pixel-wide target. */
 val BattingGaugeBands = listOf(
-    GaugeBand(0f, 0.2f, Color(0xFFD32F2F)),
-    GaugeBand(0.2f, 0.35f, Color(0xFFFFC107)),
-    GaugeBand(0.35f, 0.65f, Color(0xFF4CAF50)),
-    GaugeBand(0.65f, 0.8f, Color(0xFFFFC107)),
-    GaugeBand(0.8f, 1f, Color(0xFFD32F2F))
+    GaugeBand(0f, BattingTimingZones.YELLOW_START, Color(0xFFD32F2F)),
+    GaugeBand(BattingTimingZones.YELLOW_START, BattingTimingZones.GREEN_START, Color(0xFFFFC107)),
+    GaugeBand(BattingTimingZones.GREEN_START, BattingTimingZones.GREEN_END, Color(0xFF4CAF50)),
+    GaugeBand(BattingTimingZones.GREEN_END, BattingTimingZones.RED_START, Color(0xFFFFC107)),
+    GaugeBand(BattingTimingZones.RED_START, 1f, Color(0xFFD32F2F)),
+    GaugeBand(
+        BattingTimingZones.GREEN_CENTER - BattingTimingZones.DARK_GREEN_HALF_WIDTH,
+        BattingTimingZones.GREEN_CENTER + BattingTimingZones.DARK_GREEN_HALF_WIDTH,
+        Color(0xFFFFD700)
+    )
 )
 
 /**
  * A just-played shot's details, used to briefly swap the batter's resting stance for a pose
- * reflecting the aggression/timing, plus a post-shot trajectory line toward wherever tilt sent
- * it. Shared between the batting screen (the player's own shot) and the bowling screen (the CPU
- * batsman's shot against the player's delivery) - same data either way.
+ * reflecting the aggression/timing, plus a post-shot trajectory line toward wherever the unified
+ * slider's release position sent it. Shared between the batting screen (the player's own shot)
+ * and the bowling screen (the CPU batsman's shot against the player's delivery) - same data
+ * either way.
  */
 data class BatterShot(
     val aggression: Aggression,
     val timingQuality: TimingQuality,
-    val tiltDirection: Float,
+    val direction: Float,
     val runs: Int,
     // Whether this delivery was on the stumps - only meaningful when timingQuality is RED (a
     // miss), where it decides whether the ball's post-outcome flight ends by breaking the stumps
@@ -274,7 +284,7 @@ private fun missedBallOffset(w: Float, h: Float, fate: MissBallFate, t: Float, a
  *  anything more elaborate than that. */
 private fun contactBallOffset(shot: BatterShot, t: Float, batStart: Offset, w: Float, scale: Float): Offset {
     val tc = t.coerceIn(0f, 1f)
-    val dirX = shot.tiltDirection.coerceIn(-1f, 1f)
+    val dirX = shot.direction.coerceIn(-1f, 1f)
     val runFactor = when {
         shot.runs >= 6 -> 1.3f
         shot.runs >= 4 -> 1.1f

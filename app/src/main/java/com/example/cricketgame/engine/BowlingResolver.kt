@@ -1,6 +1,7 @@
 package com.example.cricketgame.engine
 
 import com.example.cricketgame.data.DeliveryTiming
+import com.example.cricketgame.data.GreenTier
 import com.example.cricketgame.data.PitchLength
 import com.example.cricketgame.data.PitchLine
 import kotlin.random.Random
@@ -10,7 +11,11 @@ data class BowlingInput(
     val targetLength: PitchLength,
     val deliveryTiming: DeliveryTiming, // where in the RED->YELLOW->GREEN->RED sweep the bowler released
     val bowlingSkill: Int,              // 1-99
-    val postPitchTilt: Float            // -1.0..1.0, applied after pitch for deviation
+    val postPitchTilt: Float,           // -1.0..1.0, applied after pitch for deviation
+    // Only meaningful when deliveryTiming == GREEN - the precision tier within it (see
+    // BowlingTimingZones.greenTier). DARK is a thin, extra-precise "perfect ball" sliver, tightened
+    // up further below beyond GREEN's already-low baseError.
+    val greenTier: GreenTier? = null
 )
 
 data class BowlingOutput(
@@ -38,7 +43,11 @@ object BowlingResolver {
             DeliveryTiming.EARLY_RED -> 0.50
             DeliveryTiming.LATE_RED -> 0.65
         }
-        val effectiveError = baseError * (1.0 - skillFactor * 0.5)
+        // The GREEN zone's DARK "perfect ball" sliver (see BowlingTimingZones.greenTier) is
+        // noticeably more pinpoint than the rest of GREEN - more likely to actually land where
+        // aimed, on top of GREEN's already-low baseError.
+        val tierFactor = if (input.deliveryTiming == DeliveryTiming.GREEN && input.greenTier == GreenTier.DARK) 0.4 else 1.0
+        val effectiveError = baseError * tierFactor * (1.0 - skillFactor * 0.5)
 
         // Chance the delivery drifts off target line due to release error
         val drifted = Random.nextDouble() < effectiveError

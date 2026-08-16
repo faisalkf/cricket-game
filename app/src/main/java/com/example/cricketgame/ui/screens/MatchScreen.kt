@@ -17,7 +17,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -28,7 +27,6 @@ import com.example.cricketgame.data.TimingQuality
 import com.example.cricketgame.data.TossChoice
 import com.example.cricketgame.sound.SoundEffects
 import com.example.cricketgame.viewmodel.MatchUiState
-import com.example.cricketgame.sensor.TiltSensorController
 import com.example.cricketgame.viewmodel.DeliveryPhase
 import com.example.cricketgame.viewmodel.MatchViewModel
 import kotlinx.coroutines.delay
@@ -54,14 +52,6 @@ fun MatchScreen(
     val viewModel: MatchViewModel = viewModel(
         factory = MatchViewModel.factory(format, playerTeam, cpuTeam, tossWinnerIsPlayer, tossChoice)
     )
-
-    val context = LocalContext.current
-    val tiltController = remember { TiltSensorController(context) }
-    DisposableEffect(Unit) {
-        tiltController.start()
-        onDispose { tiltController.stop() }
-    }
-    val tilt by tiltController.tilt.collectAsState()
 
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val runUp by viewModel.runUp.collectAsStateWithLifecycle()
@@ -142,20 +132,18 @@ fun MatchScreen(
                         BattingControls(
                             runUpProgress = runUp.progress,
                             timingIndicator = runUp.quality,
-                            tiltDirection = tilt,
-                            onPlayShot = { aggression -> viewModel.playBattingShot(aggression, tilt) }
+                            onPlayShot = { direction -> viewModel.playBattingShot(direction) }
                         )
                     } else {
                         BowlingControls(
                             runUpProgress = runUp.progress,
                             pitchLength = runUp.pitchLength,
                             postPitchTilt = runUp.postPitchTilt,
-                            tiltDirection = tilt,
                             bowlerName = uiState.bowlerName,
                             shot = batterShot,
                             ballSeq = uiState.ballSeq,
-                            onDeliveryReleased = { line, length, deliveryTiming, postTilt ->
-                                viewModel.bowlDelivery(line, length, deliveryTiming, postTilt)
+                            onDeliveryReleased = { direction, deliveryTiming ->
+                                viewModel.bowlDelivery(direction, deliveryTiming)
                             }
                         )
                     }
@@ -213,7 +201,7 @@ private fun batterShotFrom(uiState: MatchUiState): BatterShot? {
     val aggression = uiState.lastBallAggression ?: return null
     val timing = uiState.lastBallTimingQuality ?: return null
     return BatterShot(
-        aggression, timing, uiState.lastBallTiltDirection, uiState.lastBallRuns, uiState.lastBallOnStumps
+        aggression, timing, uiState.lastBallDirection, uiState.lastBallRuns, uiState.lastBallOnStumps
     )
 }
 

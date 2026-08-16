@@ -7,7 +7,7 @@ data class BallResult(
     val bowler: Player,
     val timingQuality: TimingQuality,
     val aggression: Aggression,
-    val tiltDirection: Float,       // -1.0 (leg side) .. +1.0 (off side)
+    val direction: Float,            // -1.0 (leg side) .. +1.0 (off side) - the unified slider's release position
     val pitchLine: PitchLine,
     val pitchLength: PitchLength,
     val onStumps: Boolean,          // did the delivery actually end up hitting the stumps line?

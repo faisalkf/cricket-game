@@ -1,94 +1,59 @@
 package com.example.cricketgame.ui.screens
 
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
 import com.example.cricketgame.data.BowlingTimingZones
 import com.example.cricketgame.data.DeliveryTiming
 import com.example.cricketgame.data.PitchLength
-import com.example.cricketgame.data.PitchLine
 
 /**
- * v1 bowling control surface.
- *
- * - ONE large pitch fills most of the screen. Press and hold anywhere on it to aim - the tap
- *   position directly sets the target line (X) and length (Y), no visible grid.
- * - Release is timed against a single-pass RED->YELLOW->GREEN->RED sweep (see
- *   [BowlingTimingZones]): EARLY_RED/YELLOW/GREEN behave as increasingly good deliveries, and
- *   releasing late (past GREEN, LATE_RED) is a no-ball.
- * - Device tilt is sampled at the moment of release and passed through as postPitchTilt - a
- *   small nudge on top of the tapped target, not an independent aim mechanic.
+ * v2 bowling control surface - the same unified slider control as BattingControls (see
+ * MatchViewModel's class doc): drag the single horizontal slider throughout the run-up sweep,
+ * release at the chosen moment. The slider's left-right position at release (-1f..1f) sets the
+ * delivery's line, replacing both the old 2D press-and-hold pitch-tap (line + length) and the
+ * accelerometer tilt nudge that used to ride on top of it - one value now does what both used to.
+ * Release timing against the sweep (unchanged RED->YELLOW->GREEN->RED zones) sets delivery
+ * quality, with GREEN further split by MatchViewModel into a standard-best-ball/perfect-ball tier
+ * (see BowlingTimingZones.greenTier). Length is no longer player-chosen - the bowler always aims
+ * for a good length; only release accuracy can still knock it off that, same as before.
  */
 @Composable
 fun BowlingControls(
     runUpProgress: Float,
     pitchLength: PitchLength,
     postPitchTilt: Float,
-    tiltDirection: Float,
     bowlerName: String,
     shot: BatterShot? = null,
     // Per-ball counter from MatchUiState - keys the shot-impact (swoosh/dust) animation so it
     // restarts exactly once per new ball; see rememberShotImpactProgress.
     ballSeq: Int = 0,
-    onDeliveryReleased: (targetLine: PitchLine, targetLength: PitchLength, deliveryTiming: DeliveryTiming, postPitchTilt: Float) -> Unit
+    onDeliveryReleased: (direction: Float, deliveryTiming: DeliveryTiming) -> Unit
 ) {
-    var isHolding by remember { mutableStateOf(false) }
-    var aimFraction by remember { mutableStateOf(Offset(0.5f, 0.5f)) }
+    var direction by remember { mutableStateOf(0f) }
 
-    // Long-lived gesture callbacks capture stale parameter values otherwise - these keep the
-    // release handler reading whatever the sweep/tilt actually are at the instant of release.
+    // Long-lived gesture callback captures a stale parameter value otherwise - this keeps the
+    // release handler reading whatever the sweep actually is at the instant of release.
     val liveProgress by rememberUpdatedState(runUpProgress)
-    val liveTilt by rememberUpdatedState(tiltDirection)
 
     val currentZone = BowlingTimingZones.classify(runUpProgress)
 
     Column(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
         Text("Bowling: $bowlerName")
         Spacer(Modifier.height(8.dp))
-        Text(if (isHolding) "Release now to bowl!" else "Press and hold anywhere on the pitch to aim")
-        Spacer(Modifier.height(8.dp))
         Text("Timing: ${zoneLabel(currentZone)}", color = zoneColor(currentZone))
         Spacer(Modifier.height(4.dp))
         TimingGauge(progress = runUpProgress, bands = BowlingGaugeBands)
-        Spacer(Modifier.height(8.dp))
-        Text("Tilt: ${"%.2f".format(tiltDirection)}  (left = leg side, right = off side)")
         Spacer(Modifier.height(12.dp))
 
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(500.dp)
-                .pointerInput(Unit) {
-                    detectTapGestures(
-                        onPress = { offset ->
-                            isHolding = true
-                            aimFraction = Offset(
-                                (offset.x / size.width).coerceIn(0f, 1f),
-                                (offset.y / size.height).coerceIn(0f, 1f)
-                            )
-                            tryAwaitRelease()
-                            isHolding = false
-
-                            val deliveryTiming = BowlingTimingZones.classify(liveProgress)
-                            val line = lineFromFraction(aimFraction.x)
-                            val length = lengthFromFraction(aimFraction.y)
-                            onDeliveryReleased(line, length, deliveryTiming, liveTilt)
-                        }
-                    )
-                }
-        ) {
+        Box(modifier = Modifier.fillMaxWidth().height(500.dp)) {
             BowlingAimPitch(
-                aimFraction = aimFraction,
-                isHolding = isHolding,
-                liveTilt = tiltDirection,
                 progress = runUpProgress,
                 pitchLength = pitchLength,
                 postPitchTilt = postPitchTilt,
@@ -96,14 +61,22 @@ fun BowlingControls(
                 ballSeq = ballSeq
             )
         }
+
+        Spacer(Modifier.height(12.dp))
+        Text("Line: ${"%.2f".format(direction)}  (left = leg side, right = off side; drag and release to bowl)")
+        Slider(
+            value = direction,
+            onValueChange = { direction = it },
+            valueRange = -1f..1f,
+            onValueChangeFinished = {
+                onDeliveryReleased(direction, BowlingTimingZones.classify(liveProgress))
+            }
+        )
     }
 }
 
 @Composable
 private fun BowlingAimPitch(
-    aimFraction: Offset,
-    isHolding: Boolean,
-    liveTilt: Float,
     progress: Float,
     pitchLength: PitchLength,
     postPitchTilt: Float,
@@ -146,24 +119,6 @@ private fun BowlingAimPitch(
         val ballRadius = ballRadiusFor(shot, postOutcome)
         drawCircle(Color(0xFFB71C1C), radius = ballRadius, center = ballPos)
         drawCircle(Color.White, radius = ballRadius, center = ballPos, style = Stroke(width = 2f))
-
-        if (isHolding) {
-            val touchPoint = Offset(aimFraction.x * w, aimFraction.y * h)
-            // The marker is drawn offset above (and nudged sideways by live tilt) rather than
-            // right under the touch point, which otherwise hides it under the player's own
-            // finger. The nudge updates continuously while still holding - a live preview of
-            // the tilt deviation, not just something applied at release.
-            val tiltNudge = liveTilt.coerceIn(-1f, 1f) * 70f
-            val marker = Offset(
-                (touchPoint.x + tiltNudge).coerceIn(40f, w - 40f),
-                (touchPoint.y - 140f).coerceIn(40f, h - 40f)
-            )
-            drawLine(Color.White.copy(alpha = 0.55f), touchPoint, marker, strokeWidth = 2f)
-            drawCircle(Color(0xFFB71C1C), radius = 22f, center = marker)
-            drawCircle(Color.White, radius = 22f, center = marker, style = Stroke(width = 4f))
-            drawLine(Color.White, Offset(marker.x - 32f, marker.y), Offset(marker.x + 32f, marker.y), strokeWidth = 2f)
-            drawLine(Color.White, Offset(marker.x, marker.y - 32f), Offset(marker.x, marker.y + 32f), strokeWidth = 2f)
-        }
     }
 }
 
@@ -171,7 +126,15 @@ private val BowlingGaugeBands = listOf(
     GaugeBand(0f, BowlingTimingZones.YELLOW_START, Color(0xFFD32F2F)),
     GaugeBand(BowlingTimingZones.YELLOW_START, BowlingTimingZones.GREEN_START, Color(0xFFFFC107)),
     GaugeBand(BowlingTimingZones.GREEN_START, BowlingTimingZones.LATE_RED_START, Color(0xFF4CAF50)),
-    GaugeBand(BowlingTimingZones.LATE_RED_START, 1f, Color(0xFFD32F2F))
+    GaugeBand(BowlingTimingZones.LATE_RED_START, 1f, Color(0xFFD32F2F)),
+    // A bright sliver marking BowlingTimingZones' DARK "perfect ball" tier, drawn on top of the
+    // GREEN band it sits inside - otherwise, like batting's six tier, it'd be an invisible,
+    // unaimable target.
+    GaugeBand(
+        BowlingTimingZones.GREEN_CENTER - BowlingTimingZones.DARK_GREEN_HALF_WIDTH,
+        BowlingTimingZones.GREEN_CENTER + BowlingTimingZones.DARK_GREEN_HALF_WIDTH,
+        Color(0xFFFFD700)
+    )
 )
 
 private fun zoneLabel(zone: DeliveryTiming): String = when (zone) {
@@ -185,19 +148,4 @@ private fun zoneColor(zone: DeliveryTiming): Color = when (zone) {
     DeliveryTiming.EARLY_RED, DeliveryTiming.LATE_RED -> Color(0xFFD32F2F)
     DeliveryTiming.YELLOW -> Color(0xFFFFC107)
     DeliveryTiming.GREEN -> Color(0xFF4CAF50)
-}
-
-private fun lineFromFraction(x: Float): PitchLine = when {
-    x < 1f / 3f -> PitchLine.OUTSIDE_LEG
-    x < 2f / 3f -> PitchLine.ON_STUMPS
-    else -> PitchLine.OUTSIDE_OFF
-}
-
-private fun lengthFromFraction(y: Float): PitchLength = when {
-    // Batting-end stumps are at the top (small y) and the bowler's own end at the bottom
-    // (large y), so a tap near the top is the fullest length and one near the bottom the
-    // shortest.
-    y < 1f / 3f -> PitchLength.FULL_YORKER
-    y < 2f / 3f -> PitchLength.GOOD_LENGTH
-    else -> PitchLength.SHORT
 }
