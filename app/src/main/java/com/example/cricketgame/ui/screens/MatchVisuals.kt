@@ -120,7 +120,7 @@ internal fun rememberShotImpactProgress(ballSeq: Int, shot: BatterShot?): ShotIm
  */
 @Composable
 fun PitchBackdrop(
-    ballProgress: Float,
+    progress: Float,
     showBall: Boolean,
     shot: BatterShot? = null,
     ballSeq: Int = 0,
@@ -138,14 +138,14 @@ fun PitchBackdrop(
 
         // Bowler at the bottom, batter at the top - matches BowlingAimPitch's layout so both
         // screens read as the same place, and the ball always travels bottom -> top.
-        drawBowlerFigure(centerX = w / 2f + 90f, feetY = h * 0.80f, progress = ballProgress, scale = 1.6f)
+        drawBowlerFigure(centerX = w / 2f + 90f, feetY = h * 0.80f, progress = progress, scale = 1.6f)
         drawBatterFigure(
             centerX = w / 2f - 100f, feetY = h * 0.10f, scale = 1.6f, shot = shot,
             swooshProgress = impact.swoosh, dustProgress = impact.dust
         )
 
         if (showBall) {
-            val ballY = ballTravelY(h, ballProgress)
+            val ballY = ballTravelY(h, progress)
             drawCircle(Color(0xFFB71C1C), radius = 14f, center = Offset(w / 2f, ballY))
             drawCircle(Color.White, radius = 14f, center = Offset(w / 2f, ballY), style = Stroke(width = 2f))
         }

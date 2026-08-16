@@ -30,9 +30,6 @@ import com.example.cricketgame.data.PitchLine
 @Composable
 fun BowlingControls(
     runUpProgress: Float,
-    // Paces the pitch visuals (bowler figure + travelling ball) independently of runUpProgress
-    // (which drives the timing gauge/release classification below) - see RunUpState.ballProgress.
-    ballProgress: Float,
     tiltDirection: Float,
     bowlerName: String,
     shot: BatterShot? = null,
@@ -90,7 +87,7 @@ fun BowlingControls(
                 aimFraction = aimFraction,
                 isHolding = isHolding,
                 liveTilt = tiltDirection,
-                progress = ballProgress,
+                progress = runUpProgress,
                 shot = shot,
                 ballSeq = ballSeq
             )

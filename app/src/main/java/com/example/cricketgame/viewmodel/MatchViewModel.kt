@@ -29,14 +29,6 @@ enum class DeliveryPhase { RUN_UP, BALL_RESULT, INNINGS_BREAK, MATCH_OVER }
 /** Ease-in exponent for both sweeps: t^POWER starts slow and accelerates toward release/GREEN. */
 private const val RUN_UP_EASE_POWER = 2.2f
 
-/**
- * Fixed duration of the ball's bottom-to-top pitch travel, deliberately independent of the
- * timing sweep's own period (which varies by role/skill for gameplay-difficulty reasons - see
- * startRunUpLoop). Keeps the ball itself feeling like the same delivery speed on the bowling
- * and batting screens regardless of which sweep pacing is driving the timing gauge underneath.
- */
-private const val BALL_FLIGHT_SWEEP_MS = 1400
-
 /** Duration of the short catch-up animation that finishes the ball's travel once a shot/delivery
  *  is released mid-sweep, so it visually arrives at the batsman/stumps instead of jumping there. */
 private const val BALL_FLIGHT_FINISH_MS = 220
@@ -76,12 +68,12 @@ data class MatchUiState(
  */
 data class RunUpState(
     val progress: Float = 0f,       // 0f..1f, one eased one-way sweep per delivery
-    val quality: TimingQuality = TimingQuality.RED,
-    // Drives the pitch visuals (bowler run-up figure + travelling ball) on a fixed, role/skill-
-    // independent clock (BALL_FLIGHT_SWEEP_MS) - separate from [progress], which paces the
-    // timing gauge and varies by role/skill for gameplay-difficulty reasons. Keeps the ball's
-    // visual travel speed consistent between the bowling and batting screens.
-    val ballProgress: Float = 0f
+    val quality: TimingQuality = TimingQuality.RED
+    // Also drives the pitch visuals (bowler run-up figure + travelling ball) directly - the
+    // ball's Y position on the pitch is a function of this same value (see ballTravelY), so its
+    // visual travel is always in sync with the timing gauge/quality classification above it: a
+    // RED-zone release is early in the ball's flight, GREEN is well along, and a completed sweep
+    // has the ball arriving at the stumps.
 )
 
 /**
@@ -283,8 +275,7 @@ class MatchViewModel(
             var elapsed = 0L
             while (isActive && elapsed < periodMs) {
                 val progress = easedSweep(elapsed, periodMs)
-                val ballProgress = easedSweep(elapsed, BALL_FLIGHT_SWEEP_MS) // quality unused while bowling
-                _runUp.value = RunUpState(progress, timingQualityFor(progress), ballProgress)
+                _runUp.value = RunUpState(progress, timingQualityFor(progress))
                 delay(16)
                 elapsed += 16
             }
@@ -294,9 +285,8 @@ class MatchViewModel(
 
     /** One eased one-way sweep (t^[RUN_UP_EASE_POWER]) of [durationMs], sampled at [elapsed] ms
      *  and clamped (not wrapped) at 1f once elapsed passes durationMs - shared shape for the
-     *  timing gauge (whose own loop is bounded by its periodMs, so it never reaches the clamp)
-     *  and the independently-paced ball-travel visuals (whose fixed duration can be shorter than
-     *  the gauge's, so it holds at the far end rather than restarting mid run-up). */
+     *  timing gauge and the ball's pitch-travel visuals, which are now driven by this same
+     *  [RunUpState.progress] value rather than a separate clock. */
     private fun easedSweep(elapsed: Long, durationMs: Int): Float {
         val t = (elapsed.toFloat() / durationMs).coerceIn(0f, 1f)
         return t.pow(RUN_UP_EASE_POWER)
@@ -322,19 +312,21 @@ class MatchViewModel(
 
     /**
      * Cancels the run-up sweep and eases the ball's remaining travel - whatever fraction is
-     * left of [RunUpState.ballProgress] - smoothly to completion over a short, fixed duration,
-     * so releasing a shot/delivery never makes the ball visually jump straight to the batsman
-     * or stumps, however early or late in the sweep it was played.
+     * left of [RunUpState.progress], the same value that positions the ball on the pitch -
+     * smoothly to completion over a short, fixed duration, so releasing a shot/delivery never
+     * makes the ball visually jump straight to the batsman or stumps, however early or late in
+     * the sweep it was played.
      */
     private fun finishBallFlight() {
         runUpJob?.cancel()
-        val startProgress = _runUp.value.ballProgress
+        val startProgress = _runUp.value.progress
         if (startProgress >= 1f) return
         runUpJob = viewModelScope.launch {
             var elapsed = 0L
             while (isActive) {
                 val t = (elapsed.toFloat() / BALL_FLIGHT_FINISH_MS).coerceIn(0f, 1f)
-                _runUp.update { it.copy(ballProgress = startProgress + (1f - startProgress) * t) }
+                val progress = startProgress + (1f - startProgress) * t
+                _runUp.update { it.copy(progress = progress, quality = timingQualityFor(progress)) }
                 if (t >= 1f) break
                 delay(16)
                 elapsed += 16
