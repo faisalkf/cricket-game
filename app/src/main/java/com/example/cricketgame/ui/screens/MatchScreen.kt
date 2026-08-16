@@ -9,6 +9,7 @@ import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
@@ -21,6 +22,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.example.cricketgame.data.BowlingTimingZones
 import com.example.cricketgame.data.MatchFormat
 import com.example.cricketgame.data.Team
 import com.example.cricketgame.data.TimingQuality
@@ -29,16 +31,17 @@ import com.example.cricketgame.sound.SoundEffects
 import com.example.cricketgame.viewmodel.MatchUiState
 import com.example.cricketgame.viewmodel.DeliveryPhase
 import com.example.cricketgame.viewmodel.MatchViewModel
+import com.example.cricketgame.viewmodel.OverSummary
 import kotlinx.coroutines.delay
 import kotlin.math.sin
 
 /**
- * Real match screen, driven by [MatchViewModel]:
- *  - a scoreboard header (score / wickets / overs / target)
- *  - BattingControls when the player's team is batting
- *  - BowlingControls when the player's team is bowling
- *  - the outcome of each ball as a fading overlay on top of the same screen (no navigation),
- *    plus innings-break / match-over states
+ * Real match screen, driven by [MatchViewModel]: a full-screen [PitchBackdrop] as the base layer
+ * (shared by both batting and bowling now - see its doc), with everything else floating on top of
+ * it rather than pushing it down - the scoreboard/timing HUD near the top, the slider control near
+ * the bottom (BattingControls or BowlingControls, whichever side the player's on), the outcome of
+ * each ball as a fading badge, and an end-of-over scorecard/innings-break/match-over overlay when
+ * applicable.
  */
 @Composable
 fun MatchScreen(
@@ -84,83 +87,144 @@ fun MatchScreen(
     // Brief, subtle screen shake - only for a six or a wicket, never on routine balls.
     val shakeOffset = rememberScreenShakeOffset(ballSeq = uiState.ballSeq, shouldShake = isWicket || isBoundarySix)
 
-    Column(
+    // The just-played shot's pose/trajectory only makes sense while its outcome is showing.
+    val batterShot = if (uiState.phase == DeliveryPhase.BALL_RESULT) batterShotFrom(uiState) else null
+    // Ties the bowler's run-up/crease visual to the exact same no-ball threshold used to actually
+    // resolve a no-ball (see PitchBackdrop/drawBowlerFigure's doc) - only meaningful while the
+    // PLAYER is the one bowling; the CPU bowler's progress follows the unrelated batting sweep and
+    // has no no-ball concept to sync to, so it keeps PitchBackdrop's 1f default there.
+    val creaseProgress = if (!uiState.isPlayerBatting) BowlingTimingZones.LATE_RED_START else 1f
+
+    Box(
         modifier = Modifier
             .fillMaxSize()
-            .padding(16.dp)
             .graphicsLayer(translationX = shakeOffset.x, translationY = shakeOffset.y)
     ) {
-        val targetSuffix = uiState.target?.let { "   Target: $it" } ?: ""
-        Text(
-            "${uiState.battingTeamName} ${uiState.score}/${uiState.wickets}   Overs: ${uiState.oversText}$targetSuffix",
-            style = MaterialTheme.typography.titleMedium
+        PitchBackdrop(
+            progress = runUp.progress,
+            pitchLength = runUp.pitchLength,
+            postPitchTilt = runUp.postPitchTilt,
+            showBall = uiState.phase == DeliveryPhase.RUN_UP || uiState.phase == DeliveryPhase.BALL_RESULT,
+            shot = batterShot,
+            outcome = uiState.lastBallOutcome,
+            ballSeq = uiState.ballSeq,
+            creaseProgress = creaseProgress,
+            modifier = Modifier.fillMaxSize()
         )
-        Text("${uiState.bowlerName} to ${uiState.strikerName}", style = MaterialTheme.typography.bodyMedium)
-        if (uiState.recentBalls.isNotEmpty()) {
-            Text("This over: ${uiState.recentBalls.joinToString(" ")}")
-        }
-        Spacer(Modifier.height(12.dp))
 
-        // BowlingControls owns one large pitch view of its own while the player is bowling
-        // (during both RUN_UP and BALL_RESULT, since it now stays mounted through the outcome
-        // overlay below), so showing this smaller atmospheric one too would be a redundant
-        // stacked pitch. It's still shown for batting, and behind the innings-break/match-over
-        // text as a bit of atmosphere.
-        val showBackdrop = uiState.isPlayerBatting ||
-            uiState.phase == DeliveryPhase.INNINGS_BREAK ||
-            uiState.phase == DeliveryPhase.MATCH_OVER
-        // The just-played shot's pose/trajectory only makes sense while its outcome is showing.
-        val batterShot = if (uiState.phase == DeliveryPhase.BALL_RESULT) batterShotFrom(uiState) else null
-        if (showBackdrop) {
-            PitchBackdrop(
-                progress = runUp.progress,
-                pitchLength = runUp.pitchLength,
-                postPitchTilt = runUp.postPitchTilt,
-                showBall = uiState.phase == DeliveryPhase.RUN_UP || uiState.phase == DeliveryPhase.BALL_RESULT,
-                shot = batterShot,
-                ballSeq = uiState.ballSeq
-            )
-            Spacer(Modifier.height(16.dp))
-        }
+        ScoreboardOverlay(uiState, modifier = Modifier.align(Alignment.TopCenter))
 
-        Box(modifier = Modifier.fillMaxWidth()) {
-            when (uiState.phase) {
-                // Both phases keep the same controls mounted - the outcome of a delivery is
-                // shown as an overlay on top rather than swapping to a different screen.
-                DeliveryPhase.RUN_UP, DeliveryPhase.BALL_RESULT -> {
-                    if (uiState.isPlayerBatting) {
-                        BattingControls(
-                            runUpProgress = runUp.progress,
-                            timingIndicator = runUp.quality,
-                            onPlayShot = { direction -> viewModel.playBattingShot(direction) }
-                        )
-                    } else {
-                        BowlingControls(
-                            runUpProgress = runUp.progress,
-                            pitchLength = runUp.pitchLength,
-                            postPitchTilt = runUp.postPitchTilt,
-                            bowlerName = uiState.bowlerName,
-                            shot = batterShot,
-                            ballSeq = uiState.ballSeq,
-                            onDeliveryReleased = { direction, deliveryTiming ->
-                                viewModel.bowlDelivery(direction, deliveryTiming)
-                            }
-                        )
-                    }
-                }
-                DeliveryPhase.INNINGS_BREAK -> {
-                    Text("Innings break", style = MaterialTheme.typography.headlineSmall)
-                }
-                DeliveryPhase.MATCH_OVER -> {
-                    Text(uiState.matchResult ?: "Match complete", style = MaterialTheme.typography.headlineSmall)
+        when (uiState.phase) {
+            // Both phases keep the same controls mounted - the outcome of a delivery is
+            // shown as an overlay on top rather than swapping to a different screen.
+            DeliveryPhase.RUN_UP, DeliveryPhase.BALL_RESULT -> {
+                if (uiState.isPlayerBatting) {
+                    BattingControls(
+                        runUpProgress = runUp.progress,
+                        timingIndicator = runUp.quality,
+                        onPlayShot = { direction -> viewModel.playBattingShot(direction) },
+                        modifier = Modifier.align(Alignment.BottomCenter)
+                    )
+                } else {
+                    BowlingControls(
+                        runUpProgress = runUp.progress,
+                        bowlerName = uiState.bowlerName,
+                        onDeliveryReleased = { direction, deliveryTiming ->
+                            viewModel.bowlDelivery(direction, deliveryTiming)
+                        },
+                        modifier = Modifier.align(Alignment.BottomCenter)
+                    )
                 }
             }
+            DeliveryPhase.OVER_BREAK -> {
+                EndOfOverOverlay(
+                    summary = uiState.overSummary,
+                    onContinue = { viewModel.continueAfterOver() },
+                    modifier = Modifier.matchParentSize()
+                )
+            }
+            DeliveryPhase.INNINGS_BREAK -> {
+                CenteredMessage("Innings break")
+            }
+            DeliveryPhase.MATCH_OVER -> {
+                CenteredMessage(uiState.matchResult ?: "Match complete")
+            }
+        }
 
-            OutcomeOverlay(
-                visible = uiState.phase == DeliveryPhase.BALL_RESULT,
-                summary = uiState.lastBallSummary,
-                modifier = Modifier.matchParentSize()
+        OutcomeOverlay(
+            visible = uiState.phase == DeliveryPhase.BALL_RESULT,
+            summary = uiState.lastBallSummary,
+            modifier = Modifier.matchParentSize()
+        )
+    }
+}
+
+/** The floating scoreboard/status HUD - score, overs, target, who's bowling to whom, this over's
+ *  balls so far - a semi-transparent panel near the top of the screen rather than a solid header
+ *  pushing the pitch down, kept compact so it doesn't cover the batter/keeper standing just below
+ *  it on the full-screen pitch. */
+@Composable
+private fun ScoreboardOverlay(uiState: MatchUiState, modifier: Modifier = Modifier) {
+    val targetSuffix = uiState.target?.let { "   Target: $it" } ?: ""
+    Column(
+        modifier = modifier
+            .padding(top = 12.dp, start = 12.dp, end = 12.dp)
+            .background(Color(0xCC1B1B1B), shape = RoundedCornerShape(14.dp))
+            .padding(horizontal = 16.dp, vertical = 10.dp)
+    ) {
+        Text(
+            "${uiState.battingTeamName} ${uiState.score}/${uiState.wickets}   Overs: ${uiState.oversText}$targetSuffix",
+            style = MaterialTheme.typography.titleMedium,
+            color = Color.White
+        )
+        Text("${uiState.bowlerName} to ${uiState.strikerName}", style = MaterialTheme.typography.bodyMedium, color = Color.White)
+        if (uiState.recentBalls.isNotEmpty()) {
+            Text("This over: ${uiState.recentBalls.joinToString(" ")}", color = Color.White)
+        }
+    }
+}
+
+/** A simple centered message over a dimming scrim, shared by the innings-break/match-over states -
+ *  both just show text over the (now atmospheric, static) pitch behind them. */
+@Composable
+private fun CenteredMessage(text: String, modifier: Modifier = Modifier) {
+    Box(modifier = modifier.fillMaxSize().background(Color(0x99000000)), contentAlignment = Alignment.Center) {
+        Text(text, style = MaterialTheme.typography.headlineSmall, color = Color.White)
+    }
+}
+
+/**
+ * The end-of-over scorecard break: a dimming scrim plus a centered card summarizing the over that
+ * just finished (runs, ball-by-ball codes, running score/wickets), with a Continue button the
+ * player must tap before the next over's first delivery starts - see
+ * MatchViewModel.showOverBreak/continueAfterOver. [summary] is only ever null for a single
+ * recomposition right as the phase flips (defensive - shouldn't linger), in which case this draws
+ * nothing rather than crash on a stale/missing snapshot.
+ */
+@Composable
+private fun EndOfOverOverlay(summary: OverSummary?, onContinue: () -> Unit, modifier: Modifier = Modifier) {
+    if (summary == null) return
+    Box(modifier = modifier.fillMaxSize().background(Color(0xB3000000)), contentAlignment = Alignment.Center) {
+        Column(
+            modifier = Modifier
+                .background(Color(0xFF1B1B1B), shape = RoundedCornerShape(20.dp))
+                .padding(28.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text("Over ${summary.oversCompleted} complete", style = MaterialTheme.typography.headlineSmall, color = Color.White)
+            Spacer(Modifier.height(12.dp))
+            Text("This over: ${summary.runsThisOver} run${if (summary.runsThisOver == 1) "" else "s"}", color = Color.White)
+            if (summary.ballCodes.isNotEmpty()) {
+                Text(summary.ballCodes.joinToString(" "), color = Color.White)
+            }
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "Score: ${summary.totalScore}/${summary.totalWickets}",
+                style = MaterialTheme.typography.titleMedium,
+                color = Color.White
             )
+            Spacer(Modifier.height(20.dp))
+            Button(onClick = onContinue) { Text("Continue") }
         }
     }
 }
@@ -245,7 +309,7 @@ private fun OutcomeOverlay(visible: Boolean, summary: String?, modifier: Modifie
         ) {
             Box(
                 modifier = Modifier
-                    .padding(top = 16.dp)
+                    .padding(top = 90.dp)
                     .background(badgeColor, shape = RoundedCornerShape(16.dp))
                     .padding(horizontal = 28.dp, vertical = 14.dp)
             ) {

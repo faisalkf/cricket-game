@@ -24,7 +24,21 @@ import kotlin.math.pow
 import kotlin.random.Random
 
 /** Which sub-state the match screen is in for the current delivery. */
-enum class DeliveryPhase { RUN_UP, BALL_RESULT, INNINGS_BREAK, MATCH_OVER }
+enum class DeliveryPhase { RUN_UP, BALL_RESULT, OVER_BREAK, INNINGS_BREAK, MATCH_OVER }
+
+/**
+ * A completed over's summary, shown by the OVER_BREAK phase's scorecard overlay - captured once
+ * (see MatchViewModel.showOverBreak) rather than read live off mutable innings/currentOverCodes
+ * state, so it stays stable while the overlay is up even though currentOverCodes/currentOverRuns
+ * get cleared for the next over the moment the player taps Continue (continueAfterOver).
+ */
+data class OverSummary(
+    val oversCompleted: Int,
+    val runsThisOver: Int,
+    val ballCodes: List<String>,
+    val totalScore: Int,
+    val totalWickets: Int
+)
 
 /** Ease-in exponent for both sweeps: t^POWER starts slow and accelerates toward release/GREEN. */
 private const val RUN_UP_EASE_POWER = 2.2f
@@ -61,6 +75,13 @@ data class MatchUiState(
     // broken vs. stopped at the batsman, see BatterShot/MatchVisuals) exactly like it already
     // drives BattingResolver's own bowled/lbw-vs-dot split.
     val lastBallOnStumps: Boolean = false,
+    // The just-played ball's actual outcome - kept as the real typed enum (rather than parsed
+    // back out of lastBallSummary's display string) so reactive visuals like the wicketkeeper
+    // (see Wicketkeeper.kt's keeperStateFor) can key off it directly.
+    val lastBallOutcome: BallOutcome? = null,
+    // Set only while phase == OVER_BREAK - the just-completed over's stats for the scorecard
+    // overlay (see OverSummary/showOverBreak).
+    val overSummary: OverSummary? = null,
     val matchResult: String? = null,
     // Increments once per resolved ball (see applyBallResult) - a stable key for one-shot
     // per-ball effects (shot-impact animation, screen shake, sound) that lastBallSummary alone
@@ -139,6 +160,12 @@ class MatchViewModel(
     // Short display codes for the over-in-progress, tracked directly (rather than sliced off
     // innings.balls) since a no-ball doesn't advance ballsInCurrentOver but still needs to show.
     private val currentOverCodes = mutableListOf<String>()
+
+    // Runs scored so far in the over-in-progress, for the end-of-over scorecard (OverSummary) -
+    // tracked directly alongside currentOverCodes rather than summed from innings.balls after the
+    // fact, for the same reason (a no-ball's extra run still needs to count here even though it
+    // doesn't advance ballsInCurrentOver).
+    private var currentOverRuns = 0
 
     // Auto-rolled delivery parameters for whichever side is CPU-controlled this ball.
     private var cpuDeliveryOnStumps = false
@@ -358,7 +385,9 @@ class MatchViewModel(
                 lastBallAggression = null,
                 lastBallTimingQuality = null,
                 lastBallDirection = 0f,
-                lastBallRuns = 0
+                lastBallRuns = 0,
+                lastBallOutcome = null,
+                overSummary = null
             )
         }
         startRunUpLoop()
@@ -584,6 +613,7 @@ class MatchViewModel(
         if (isWicket) strikerIndex++
 
         currentOverCodes.add(displayCode(result, legalDelivery))
+        currentOverRuns += result.runsScored
         awaitingRebowl = !legalDelivery
 
         _uiState.update {
@@ -598,6 +628,7 @@ class MatchViewModel(
                 lastBallDirection = result.direction,
                 lastBallRuns = result.runsScored,
                 lastBallOnStumps = result.onStumps,
+                lastBallOutcome = result.outcome,
                 recentBalls = currentOverCodes.toList(),
                 ballSeq = it.ballSeq + 1
             )
@@ -609,13 +640,15 @@ class MatchViewModel(
         }
     }
 
+    /**
+     * Guard with !awaitingRebowl too: a no-ball bowled as the first ball of an over also has
+     * ballsInCurrentOver==0 (it never advanced), which would otherwise look identical to a
+     * just-completed over and wrongly trigger the over-break/wipe the no-ball's display code.
+     */
     private fun advanceAfterResult() {
-        // Guard with !awaitingRebowl too: a no-ball bowled as the first ball of an over also
-        // has ballsInCurrentOver==0 (it never advanced), which would otherwise look identical
-        // to a just-completed over and wrongly wipe the no-ball's display code.
-        if (innings.ballsInCurrentOver == 0 && innings.ballsBowled > 0 && !awaitingRebowl) {
+        val overJustCompleted = innings.ballsInCurrentOver == 0 && innings.ballsBowled > 0 && !awaitingRebowl
+        if (overJustCompleted) {
             lastOverBowlerId = currentBowler.id
-            currentOverCodes.clear()
         }
 
         if (innings.isComplete) {
@@ -623,6 +656,43 @@ class MatchViewModel(
             return
         }
 
+        if (overJustCompleted) {
+            showOverBreak()
+            return
+        }
+
+        currentStriker = innings.battingTeam.players[strikerIndex.coerceIn(0, 10)]
+        startDelivery()
+    }
+
+    /**
+     * Pauses at the end of a completed over (see [advanceAfterResult]) with a scorecard overlay -
+     * captures the over's stats into an [OverSummary] snapshot (currentOverCodes/currentOverRuns
+     * keep accumulating/clearing internally as normal, so the snapshot is what stays stable for
+     * display) and waits for [continueAfterOver] rather than auto-advancing like every other ball,
+     * whether the player was batting or bowling that over.
+     */
+    private fun showOverBreak() {
+        _uiState.update {
+            it.copy(
+                phase = DeliveryPhase.OVER_BREAK,
+                overSummary = OverSummary(
+                    oversCompleted = innings.oversCompleted,
+                    runsThisOver = currentOverRuns,
+                    ballCodes = currentOverCodes.toList(),
+                    totalScore = innings.totalRuns,
+                    totalWickets = innings.wickets
+                )
+            )
+        }
+    }
+
+    /** Called by the end-of-over scorecard overlay's Continue button - only then does the next
+     *  over's first delivery actually start. */
+    fun continueAfterOver() {
+        if (_uiState.value.phase != DeliveryPhase.OVER_BREAK) return
+        currentOverCodes.clear()
+        currentOverRuns = 0
         currentStriker = innings.battingTeam.players[strikerIndex.coerceIn(0, 10)]
         startDelivery()
     }
@@ -639,6 +709,7 @@ class MatchViewModel(
                 lastOverBowlerId = null
                 awaitingRebowl = false
                 currentOverCodes.clear()
+                currentOverRuns = 0
                 currentStriker = innings.battingTeam.players[0]
 
                 _uiState.update {

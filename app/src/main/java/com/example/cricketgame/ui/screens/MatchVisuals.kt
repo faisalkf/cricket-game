@@ -5,6 +5,7 @@ import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearOutSlowInEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.runtime.Composable
@@ -24,6 +25,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.graphics.Path
 import com.example.cricketgame.data.Aggression
+import com.example.cricketgame.data.BallOutcome
 import com.example.cricketgame.data.BattingTimingZones
 import com.example.cricketgame.data.PitchLength
 import com.example.cricketgame.data.ShotSide
@@ -164,11 +166,17 @@ internal fun rememberPostOutcomeProgress(ballSeq: Int, shot: BatterShot?, runUpP
 }
 
 /**
- * The batting-side pitch, deliberately matching BowlingControls' BowlingAimPitch in size and
- * proportions (same 500dp height, same 0.30-0.70 pitch strip, same stump margins and 1.6x
- * figure scale) so the two screens read as the same place rather than two differently-scaled
- * pitches. It has no aim target since batting isn't tap-to-aim, but does animate the bowler's
- * run-up and the ball travelling down the pitch as the delivery is bowled.
+ * The one shared pitch view for BOTH the batting and bowling screens (no more separate
+ * per-screen pitch composables - BowlingControls used to own its own near-identical copy; now it
+ * just contributes the floating slider overlay, and this is the single full-screen backdrop
+ * either way, so there's exactly one place drawing the bowler/batter/keeper/ball to keep in sync).
+ * Fills the whole screen - the caller layers the scoreboard/timing HUD and the slider control as
+ * floating overlays on top rather than this pushing them down.
+ *
+ * [creaseProgress] is [BowlingTimingZones.LATE_RED_START] when the PLAYER is bowling (ties the
+ * bowler's run-up/crease visual to the exact same no-ball threshold - see [drawBowlerFigure]) or
+ * its 1f default otherwise (the CPU bowler on the batting screen, whose progress follows the
+ * unrelated batting sweep and has no no-ball concept to sync to).
  */
 @Composable
 fun PitchBackdrop(
@@ -177,18 +185,26 @@ fun PitchBackdrop(
     postPitchTilt: Float,
     showBall: Boolean,
     shot: BatterShot? = null,
+    outcome: BallOutcome? = null,
     ballSeq: Int = 0,
+    creaseProgress: Float = 1f,
     modifier: Modifier = Modifier
 ) {
     val impact = rememberShotImpactProgress(ballSeq, shot)
     val postOutcome = rememberPostOutcomeProgress(ballSeq, shot, progress)
-    Canvas(modifier = modifier.fillMaxWidth().height(500.dp)) {
+    val keeperState = keeperStateFor(shot, outcome)
+    Canvas(modifier = modifier.fillMaxSize()) {
         val w = size.width
         val h = size.height
         val batterCenterX = w / 2f - 100f
         val batterFeetY = h * 0.10f
+        val stripLeft = w * 0.30f
+        val stripRight = w * 0.70f
+        val creaseY = h * 0.88f
+        val runUpStartY = h * 0.99f
 
         drawPitchBackground(w, h)
+        drawCrease(stripLeft, stripRight, creaseY)
 
         val breakT = stumpsBreakT(shot, postOutcome)
         if (breakT != null) {
@@ -197,10 +213,13 @@ fun PitchBackdrop(
             drawStumps(centerX = w / 2f, baseY = h * 0.06f, scale = 1.6f)
         }
         drawStumps(centerX = w / 2f, baseY = h * 0.94f, scale = 1.6f)
+        drawWicketkeeperFigure(centerX = batterCenterX, baseY = h * 0.045f, scale = 1.1f, state = keeperState, stateProgress = postOutcome)
 
-        // Bowler at the bottom, batter at the top - matches BowlingAimPitch's layout so both
-        // screens read as the same place, and the ball always travels bottom -> top.
-        drawBowlerFigure(centerX = w / 2f + 90f, feetY = h * 0.80f, progress = progress, scale = 1.6f)
+        // Bowler at the bottom, batter at the top - the ball always travels bottom -> top.
+        drawBowlerFigure(
+            centerX = w / 2f + 90f, creaseY = creaseY, runUpStartY = runUpStartY,
+            progress = progress, scale = 1.6f, creaseProgress = creaseProgress
+        )
         drawBatterFigure(
             centerX = batterCenterX, feetY = batterFeetY, scale = 1.6f, shot = shot,
             swooshProgress = impact.swoosh, dustProgress = impact.dust
@@ -389,7 +408,7 @@ private fun contactBallOffset(shot: BatterShot, t: Float, batStart: Offset, w: F
 /** Plain scalar lerp - androidx.compose.ui.geometry.lerp only overloads Offset/Size/Rect/etc.,
  *  not bare Float, so the handful of single-axis interpolations above (missedBallOffset) need
  *  their own. */
-private fun lerpFloat(start: Float, stop: Float, fraction: Float): Float = start + (stop - start) * fraction
+internal fun lerpFloat(start: Float, stop: Float, fraction: Float): Float = start + (stop - start) * fraction
 
 private fun quadraticBezier(p0: Offset, p1: Offset, p2: Offset, t: Float): Offset {
     val u = 1f - t
@@ -491,7 +510,7 @@ internal fun DrawScope.drawPitchBackground(w: Float, h: Float) {
 }
 
 /** A soft grounding shadow beneath a figure's feet - a cheap depth cue shared by both figures. */
-private fun DrawScope.drawFootShadow(centerX: Float, feetY: Float, scale: Float) {
+internal fun DrawScope.drawFootShadow(centerX: Float, feetY: Float, scale: Float) {
     drawOval(
         Color(0x33000000),
         topLeft = Offset(centerX - 16f * scale, feetY - 3f * scale),
@@ -507,7 +526,7 @@ private fun DrawScope.drawFootShadow(centerX: Float, feetY: Float, scale: Float)
 /** A two-segment limb (e.g. upper arm + forearm, or thigh + shin) bent at [joint] - a single
  *  straight line reads as a rigid stick limb; two shorter segments either side of a small joint
  *  circle reads as an actual elbow/knee. */
-private fun DrawScope.drawJointedLimb(from: Offset, joint: Offset, to: Offset, brush: Brush, strokeWidth: Float) {
+internal fun DrawScope.drawJointedLimb(from: Offset, joint: Offset, to: Offset, brush: Brush, strokeWidth: Float) {
     drawLine(brush, from, joint, strokeWidth = strokeWidth, cap = StrokeCap.Round)
     drawLine(brush, joint, to, strokeWidth = strokeWidth * 0.82f, cap = StrokeCap.Round)
     drawCircle(brush, radius = strokeWidth * 0.42f, center = joint)
@@ -515,13 +534,13 @@ private fun DrawScope.drawJointedLimb(from: Offset, joint: Offset, to: Offset, b
 
 /** A leg bent at the knee toward [foot] from [hip] - the knee sits partway down and biased toward
  *  the foot's x (rather than straight below the hip), for a bent running/stance silhouette. */
-private fun DrawScope.drawBentLeg(hip: Offset, foot: Offset, brush: Brush, strokeWidth: Float) {
+internal fun DrawScope.drawBentLeg(hip: Offset, foot: Offset, brush: Brush, strokeWidth: Float) {
     val knee = Offset(hip.x + (foot.x - hip.x) * 0.55f, hip.y + (foot.y - hip.y) * 0.55f)
     drawJointedLimb(hip, knee, foot, brush, strokeWidth)
 }
 
 /** An arm bent at the elbow toward [hand] from [shoulder] - see [drawBentLeg]. */
-private fun DrawScope.drawBentArm(shoulder: Offset, hand: Offset, brush: Brush, strokeWidth: Float) {
+internal fun DrawScope.drawBentArm(shoulder: Offset, hand: Offset, brush: Brush, strokeWidth: Float) {
     val elbow = Offset(shoulder.x + (hand.x - shoulder.x) * 0.55f, shoulder.y + (hand.y - shoulder.y) * 0.4f)
     drawJointedLimb(shoulder, elbow, hand, brush, strokeWidth)
 }
@@ -529,7 +548,7 @@ private fun DrawScope.drawBentArm(shoulder: Offset, hand: Offset, brush: Brush, 
 /** The torso as a tapered polygon (wider at the shoulders, narrower at the waist) rather than a
  *  single flat-width stroke, plus a faint shaded stripe down one side for a bit of rounded volume
  *  instead of a flat cutout - both purely Canvas-primitive depth/shape cues, no bitmaps. */
-private fun DrawScope.drawTorso(centerX: Float, top: Float, bottom: Float, shoulderWidth: Float, waistWidth: Float, brush: Brush) {
+internal fun DrawScope.drawTorso(centerX: Float, top: Float, bottom: Float, shoulderWidth: Float, waistWidth: Float, brush: Brush) {
     val path = Path().apply {
         moveTo(centerX - shoulderWidth / 2f, top)
         lineTo(centerX + shoulderWidth / 2f, top)
@@ -571,6 +590,27 @@ internal fun DrawScope.drawStumps(centerX: Float, baseY: Float, scale: Float = 1
         strokeWidth = strokeW,
         cap = StrokeCap.Round
     )
+}
+
+/**
+ * The bowling (front-foot) crease - a clean dashed line the whole width of the pitch strip, plus a
+ * short return-crease tick at each end, distinct from the plain solid boundary lines
+ * drawPitchBackground already draws at the very top/bottom of the strip so it doesn't read as just
+ * another one of those. This is the line drawBowlerFigure's run-up animates toward - see its doc
+ * for how the two stay in sync via a shared progress value rather than a second timing system.
+ */
+internal fun DrawScope.drawCrease(stripLeft: Float, stripRight: Float, y: Float) {
+    val dashLength = 10f
+    val gapLength = 6f
+    var x = stripLeft
+    while (x < stripRight) {
+        val segEnd = (x + dashLength).coerceAtMost(stripRight)
+        drawLine(Color.White, Offset(x, y), Offset(segEnd, y), strokeWidth = 3f)
+        x += dashLength + gapLength
+    }
+    listOf(stripLeft, stripRight).forEach { endX ->
+        drawLine(Color.White, Offset(endX, y - 8f), Offset(endX, y + 8f), strokeWidth = 3f)
+    }
 }
 
 /**
@@ -616,26 +656,56 @@ internal fun DrawScope.drawBrokenStumps(centerX: Float, baseY: Float, scale: Flo
 }
 
 /**
- * The fielding side's bowler at the bowling end, animated from the run-up sweep's progress
- * (0f..1f): a 3-frame running cycle - wide stride left, feet-together mid-stride, wide stride
- * right - that cycles increasingly fast as approach nears the gather/release phase
- * (approach^1.6 grows faster than approach itself, so the apparent stride rate visibly quickens
- * rather than flipping at a flat, constant rate), then a distinct "gather" beat (planting,
- * bowling arm drawn back to cock it) before a clear "release" beat (arm fully extended overhead) -
- * PART 4's fuller run-in, replacing the old flat 2-frame cycle that jumped straight from running
- * to a raised arm with no build-up. Reused for both the CPU bowler (batting screens, driven by the
- * batting sweep) and the player's own bowler (bowling screen, driven by their release-timing
- * sweep) - same function, same poses, either way. Limbs are jointed (see [drawBentLeg]/
- * [drawBentArm]) and the torso a tapered polygon (see [drawTorso]) for a more human silhouette
- * (PART 1); [depthScale] also very subtly grows the whole figure as approach nears 1, a cheap
- * perspective cue suggesting the bowler is physically closing the distance, not just sliding.
+ * The fielding side's bowler at the bowling end, now a real run-up rather than a near-static pose
+ * cycle: at progress 0f they're all the way back at [runUpStartY] and run FORWARD (decreasing y,
+ * toward the batter) as progress advances, reaching the front-foot crease at [creaseY] exactly
+ * when progress hits [creaseProgress] - crucially, this is the SAME progress value that already
+ * drives the RED/YELLOW/GREEN/LATE_RED timing sweep, not a second/parallel clock, so "have they
+ * reached the crease yet" and "is this release a no-ball yet" can never disagree. On the bowling
+ * screen the caller passes creaseProgress = BowlingTimingZones.LATE_RED_START (0.70) - the
+ * existing no-ball threshold - so releasing before the bowler visually reaches the line is a legal
+ * delivery and releasing after (into LATE_RED) means the bowler has already visibly overstepped it
+ * (progress beyond creaseProgress keeps easing them a short distance further past [creaseY], a
+ * visible "foot fault"). Elsewhere (the CPU bowler on the batting screen, whose progress follows
+ * the unrelated batting sweep and has no no-ball concept at all) the caller just leaves
+ * creaseProgress at its 1f default - the bowler still runs the full distance and arrives at the
+ * crease right as they release, with nothing to overstep.
+ *
+ * Poses scale with the SAME creaseProgress rather than fixed 0.8f/0.93f cutoffs, so a well-timed
+ * bowling-screen release (GREEN ends at 0.70, i.e. AT creaseProgress) actually shows the arm
+ * coming over near the crease instead of the release pose only ever appearing deep in no-ball
+ * territory: a 3-frame running cycle (wide stride left, feet-together mid-stride, wide stride
+ * right) that cycles increasingly fast as they near the gather/release phase, then a distinct
+ * "gather" beat (planting, bowling arm drawn back to cock it) before a clear "release" beat (arm
+ * fully extended overhead). Reused for both the CPU bowler (batting screens) and the player's own
+ * bowler (bowling screen) - same function, same poses, either way. Limbs are jointed (see
+ * [drawBentLeg]/[drawBentArm]) and the torso a tapered polygon (see [drawTorso]) for a more human
+ * silhouette; [depthScale] also very subtly grows the whole figure as they near the crease, a
+ * cheap perspective cue suggesting they're physically closing the distance, not just sliding.
  */
-internal fun DrawScope.drawBowlerFigure(centerX: Float, feetY: Float, progress: Float, scale: Float = 1f) {
+internal fun DrawScope.drawBowlerFigure(
+    centerX: Float,
+    creaseY: Float,
+    runUpStartY: Float,
+    progress: Float,
+    scale: Float = 1f,
+    creaseProgress: Float = 1f
+) {
     val approach = progress.coerceIn(0f, 1f)
-    val depthScale = scale * (0.94f + 0.06f * approach)
-    // The bowler sits at the BOTTOM of the pitch, so running in toward release means moving UP
-    // the canvas (toward the batter's end) - feet's y decreases as approach nears 1.
-    val feet = feetY + (1f - approach) * 18f * depthScale
+    val runUpDistance = runUpStartY - creaseY
+    // A short overstep distance past the crease, only ever reached if approach runs past
+    // creaseProgress (the bowling screen's no-ball zone) - proportional to the run-up's own
+    // distance so it stays sensible at any screen size, capped so a tiny run-up can't produce a
+    // silly-looking overstep.
+    val oversteppedY = creaseY - (runUpDistance * 0.25f).coerceAtMost(24f)
+    val feetProgress = (approach / creaseProgress).coerceIn(0f, 1f)
+    val feet = if (approach <= creaseProgress) {
+        lerpFloat(runUpStartY, creaseY, feetProgress)
+    } else {
+        val overstepT = ((approach - creaseProgress) / (1f - creaseProgress)).coerceIn(0f, 1f)
+        lerpFloat(creaseY, oversteppedY, overstepT)
+    }
+    val depthScale = scale * (0.94f + 0.06f * feetProgress)
     val bodyTop = feet - 58f * depthScale
     val bodyBottom = feet - 14f * depthScale
     val headCenter = Offset(centerX, bodyTop - 12f * depthScale)
@@ -668,14 +738,17 @@ internal fun DrawScope.drawBowlerFigure(centerX: Float, feetY: Float, progress: 
     val shoulder = Offset(centerX, bodyTop + 6f * depthScale)
 
     when {
-        approach >= 0.93f -> {
+        approach >= creaseProgress * 0.93f -> {
             // release: front leg planted well forward, back leg trailing, bowling arm fully
-            // extended overhead through an elbow joint - the clear release beat.
+            // extended overhead through an elbow joint - the clear release beat. Scaled off
+            // creaseProgress (not a fixed 0.93f) so a well-timed bowling-screen release - GREEN
+            // ends right at creaseProgress - actually reaches this pose, instead of it only ever
+            // appearing deep in no-ball territory.
             drawBentLeg(hip, Offset(centerX + 18f * depthScale, feet), trouserBrush, legStroke)
             drawBentLeg(hip, Offset(centerX - 12f * depthScale, feet - 6f * depthScale), trouserBrush, legStroke)
             drawBentArm(shoulder, Offset(centerX + 10f * depthScale, bodyTop - 26f * depthScale), shirtBrush, armStroke)
         }
-        approach >= 0.8f -> {
+        approach >= creaseProgress * 0.8f -> {
             // gather: front leg starting to plant, bowling arm drawn back and down to cock it -
             // a distinct beat between running and the release, rather than jumping straight there.
             drawBentLeg(hip, Offset(centerX + 10f * depthScale, feet), trouserBrush, legStroke)
@@ -683,7 +756,7 @@ internal fun DrawScope.drawBowlerFigure(centerX: Float, feetY: Float, progress: 
             drawBentArm(shoulder, Offset(centerX - 14f * depthScale, bodyBottom + 6f * depthScale), shirtBrush, armStroke)
         }
         else -> {
-            val cycleIndex = ((approach.pow(1.6f)) * 18f).toInt() % 3
+            val cycleIndex = ((feetProgress.pow(1.6f)) * 18f).toInt() % 3
             val frontDx = when (cycleIndex) { 0 -> 14f; 2 -> -14f; else -> 0f }
             // Feet lift slightly together at the mid-stride frame (cycleIndex 1) to read as an
             // airborne moment between footfalls, rather than three grounded poses in a row.

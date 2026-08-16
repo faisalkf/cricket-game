@@ -1,7 +1,8 @@
 package com.example.cricketgame.ui.screens
 
-import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
@@ -10,30 +11,26 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import com.example.cricketgame.data.BowlingTimingZones
 import com.example.cricketgame.data.DeliveryTiming
-import com.example.cricketgame.data.PitchLength
 
 /**
- * v2 bowling control surface - the same unified slider control as BattingControls (see
- * MatchViewModel's class doc): drag the single horizontal slider throughout the run-up sweep,
- * release at the chosen moment. The slider's left-right position at release (-1f..1f) sets the
- * delivery's line, replacing both the old 2D press-and-hold pitch-tap (line + length) and the
- * accelerometer tilt nudge that used to ride on top of it - one value now does what both used to.
- * Release timing against the sweep (unchanged RED->YELLOW->GREEN->RED zones) sets delivery
- * quality, with GREEN further split by MatchViewModel into a standard-best-ball/perfect-ball tier
- * (see BowlingTimingZones.greenTier). Length is no longer player-chosen - the bowler always aims
- * for a good length; only release accuracy can still knock it off that, same as before.
+ * v3 bowling control surface - now just the floating slider panel; the pitch itself (bowler
+ * run-up, batter, wicketkeeper, ball) lives entirely in the shared full-screen [PitchBackdrop],
+ * drawn once by MatchScreen underneath this and BattingControls' equivalent panel rather than
+ * each screen owning a near-duplicate pitch view. Same unified control as BattingControls: drag
+ * the single horizontal slider throughout the run-up sweep, release at the chosen moment. The
+ * slider's left-right position at release (-1f..1f) sets the delivery's line, replacing both the
+ * old 2D press-and-hold pitch-tap (line + length) and the accelerometer tilt nudge that used to
+ * ride on top of it - one value now does what both used to. Release timing against the sweep sets
+ * delivery quality, with GREEN further split by MatchViewModel into a standard-best-ball/
+ * perfect-ball tier (see BowlingTimingZones.greenTier). Length is no longer player-chosen - the
+ * bowler always aims for a good length; only release accuracy can still knock it off that.
  */
 @Composable
 fun BowlingControls(
     runUpProgress: Float,
-    pitchLength: PitchLength,
-    postPitchTilt: Float,
     bowlerName: String,
-    shot: BatterShot? = null,
-    // Per-ball counter from MatchUiState - keys the shot-impact (swoosh/dust) animation so it
-    // restarts exactly once per new ball; see rememberShotImpactProgress.
-    ballSeq: Int = 0,
-    onDeliveryReleased: (direction: Float, deliveryTiming: DeliveryTiming) -> Unit
+    onDeliveryReleased: (direction: Float, deliveryTiming: DeliveryTiming) -> Unit,
+    modifier: Modifier = Modifier
 ) {
     var direction by remember { mutableStateOf(0f) }
 
@@ -43,26 +40,22 @@ fun BowlingControls(
 
     val currentZone = BowlingTimingZones.classify(runUpProgress)
 
-    Column(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
-        Text("Bowling: $bowlerName")
-        Spacer(Modifier.height(8.dp))
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .background(Color(0xCC1B1B1B), shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp))
+            .padding(16.dp)
+    ) {
+        Text("Bowling: $bowlerName", color = Color.White)
+        Spacer(Modifier.height(4.dp))
         Text("Timing: ${zoneLabel(currentZone)}", color = zoneColor(currentZone))
         Spacer(Modifier.height(4.dp))
         TimingGauge(progress = runUpProgress, bands = BowlingGaugeBands)
-        Spacer(Modifier.height(12.dp))
-
-        Box(modifier = Modifier.fillMaxWidth().height(500.dp)) {
-            BowlingAimPitch(
-                progress = runUpProgress,
-                pitchLength = pitchLength,
-                postPitchTilt = postPitchTilt,
-                shot = shot,
-                ballSeq = ballSeq
-            )
-        }
-
-        Spacer(Modifier.height(12.dp))
-        Text("Line: ${"%.2f".format(direction)}  (left = leg side, right = off side; drag and release to bowl)")
+        Spacer(Modifier.height(8.dp))
+        Text(
+            "Line: ${"%.2f".format(direction)}  (left = leg side, right = off side; drag and release to bowl)",
+            color = Color.White
+        )
         Slider(
             value = direction,
             onValueChange = { direction = it },
@@ -71,48 +64,6 @@ fun BowlingControls(
                 onDeliveryReleased(direction, BowlingTimingZones.classify(liveProgress))
             }
         )
-    }
-}
-
-@Composable
-private fun BowlingAimPitch(
-    progress: Float,
-    pitchLength: PitchLength,
-    postPitchTilt: Float,
-    shot: BatterShot?,
-    ballSeq: Int
-) {
-    val impact = rememberShotImpactProgress(ballSeq, shot)
-    val postOutcome = rememberPostOutcomeProgress(ballSeq, shot, progress)
-    Canvas(modifier = Modifier.fillMaxSize()) {
-        val w = size.width
-        val h = size.height
-        val batterCenterX = w / 2f - 100f
-        val batterFeetY = h * 0.10f
-
-        // Shared with PitchBackdrop (the batting screen's pitch) so both screens read as the
-        // same place.
-        drawPitchBackground(w, h)
-
-        // the bowler's own end at the bottom - this is the player's own bowler, run-up animated
-        // from the same release-timing sweep they're aiming against, matching PitchBackdrop's
-        // layout so both screens read as the same place
-        drawStumps(centerX = w / 2f, baseY = h * 0.94f, scale = 1.6f)
-        // batting-end stumps (the target, and where length is measured toward) at the top
-        val breakT = stumpsBreakT(shot, postOutcome)
-        if (breakT != null) {
-            drawBrokenStumps(centerX = w / 2f, baseY = h * 0.06f, scale = 1.6f, breakT = breakT)
-        } else {
-            drawStumps(centerX = w / 2f, baseY = h * 0.06f, scale = 1.6f)
-        }
-
-        drawBowlerFigure(centerX = w / 2f + 90f, feetY = h * 0.80f, progress = progress, scale = 1.6f)
-        drawBatterFigure(
-            centerX = batterCenterX, feetY = batterFeetY, scale = 1.6f, shot = shot,
-            swooshProgress = impact.swoosh, dustProgress = impact.dust
-        )
-
-        drawTravellingBall(w, h, progress, pitchLength, postPitchTilt, shot, postOutcome, batterCenterX, batterFeetY)
     }
 }
 
