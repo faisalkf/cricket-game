@@ -12,6 +12,20 @@ enum class Aggression { DEFENSIVE, GROUND, AERIAL }
 
 enum class TimingQuality { RED, YELLOW, GREEN }
 
+/**
+ * Which side of the pitch a unified-slider release position falls on - the SAME left/right split
+ * for both batting (shot direction) and bowling (delivery line), splitting the -1f..1f range at
+ * dead center: negative = ON_SIDE (leg side), non-negative = OFF_SIDE. This is a plain 2-way
+ * split, unlike [PitchLine]'s 3-way leg/stumps/off grid (which still separately governs whether a
+ * bowling delivery ends up on the stumps) - it exists purely to answer "which half did this
+ * release land in", for [MatchViewModel]'s on/off-side mismatch penalty (batting shot side vs.
+ * actual delivery side) and MatchVisuals' distinct on/off-side bat-swing shapes.
+ */
+enum class ShotSide { ON_SIDE, OFF_SIDE }
+
+/** See [ShotSide] - splits a -1f..1f release direction at dead center (0f). */
+fun sideFromDirection(direction: Float): ShotSide = if (direction < 0f) ShotSide.ON_SIDE else ShotSide.OFF_SIDE
+
 enum class FieldMode { ATTACKING, DEFENSIVE }
 
 enum class BallOutcome {

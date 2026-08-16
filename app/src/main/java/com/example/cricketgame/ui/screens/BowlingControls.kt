@@ -7,7 +7,6 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.unit.dp
 import com.example.cricketgame.data.BowlingTimingZones
 import com.example.cricketgame.data.DeliveryTiming
@@ -113,12 +112,7 @@ private fun BowlingAimPitch(
             swooshProgress = impact.swoosh, dustProgress = impact.dust
         )
 
-        val ballPos = ballOffsetFor(
-            w, h, progress, pitchLength, postPitchTilt, shot, postOutcome, batterCenterX, batterFeetY
-        )
-        val ballRadius = ballRadiusFor(shot, postOutcome)
-        drawCircle(Color(0xFFB71C1C), radius = ballRadius, center = ballPos)
-        drawCircle(Color.White, radius = ballRadius, center = ballPos, style = Stroke(width = 2f))
+        drawTravellingBall(w, h, progress, pitchLength, postPitchTilt, shot, postOutcome, batterCenterX, batterFeetY)
     }
 }
 

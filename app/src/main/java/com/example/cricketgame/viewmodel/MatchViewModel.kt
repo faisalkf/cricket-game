@@ -168,7 +168,11 @@ class MatchViewModel(
     fun playBattingShot(direction: Float) {
         if (_uiState.value.phase != DeliveryPhase.RUN_UP) return
         val progress = _runUp.value.progress
-        val timing = _runUp.value.quality
+        // On/off-side mismatch penalty (see downgradeForSideMismatch): the delivery's actual side
+        // is whatever cpuDeliveryTilt landed on for this ball (rolled in rollCpuDelivery, and also
+        // what's driving the pre-contact ball curve via _runUp.postPitchTilt) - aimed the wrong
+        // side of it and the achieved timing is downgraded a tier before it does anything else.
+        val timing = downgradeForSideMismatch(_runUp.value.quality, direction, cpuDeliveryTilt)
         val aggression = battingAggressionFor(timing, progress)
         finishBallFlight()
         val striker = currentStriker
@@ -217,6 +221,31 @@ class MatchViewModel(
     }
 
     /**
+     * PART 5 mismatch mechanic - TUNE HERE. If a batting shot's side (from [shotDirection]) and
+     * the actual delivery's side (from [deliveryDirection]) don't match - e.g. the batsman aimed
+     * off-side but the ball actually came in on-side, or vice versa - the achieved [rawTiming] is
+     * knocked down one tier (GREEN->YELLOW, YELLOW->RED) before it drives anything else: the
+     * outcome roll (BattingResolver.resolve), the aggression-tier trajectory
+     * ([battingAggressionFor]), AND the displayed/visualized timing quality (BatterShot, via
+     * BallResult.timingQuality) - the batsman genuinely was less ready for a ball on the side they
+     * weren't aiming at, whatever the raw release timing was. RED stays RED (already the worst
+     * tier - there's nothing lower to fall to). First-pass magnitude (a flat one-tier downgrade,
+     * side-independent, no skill mitigation) - expected to need tuning after playtesting; a softer
+     * option would make it a probability rather than a certainty, or let higher batting skill
+     * partially resist it.
+     */
+    private fun downgradeForSideMismatch(rawTiming: TimingQuality, shotDirection: Float, deliveryDirection: Float): TimingQuality {
+        val mismatch = sideFromDirection(shotDirection) != sideFromDirection(deliveryDirection)
+        return if (mismatch) downgradeTimingTier(rawTiming) else rawTiming
+    }
+
+    private fun downgradeTimingTier(timing: TimingQuality): TimingQuality = when (timing) {
+        TimingQuality.GREEN -> TimingQuality.YELLOW
+        TimingQuality.YELLOW -> TimingQuality.RED
+        TimingQuality.RED -> TimingQuality.RED
+    }
+
+    /**
      * Called by BowlingControls when the player releases the unified slider. [direction] is the
      * slider's left-right position at that instant (-1f leg side .. +1f off side), driving both
      * the target line (see [lineFromDirection]) and the post-pitch curve bias, replacing the old
@@ -252,7 +281,13 @@ class MatchViewModel(
         // CPU batsman's approach is rolled now, biased by skill and by how good the release was.
         val batsman = currentStriker
         val skillFactor = batsman.battingSkill / 99.0
-        val timing = rollCpuBattingTiming(skillFactor, deliveryTiming, greenTier)
+        val rawTiming = rollCpuBattingTiming(skillFactor, deliveryTiming, greenTier)
+        // On/off-side mismatch penalty (see downgradeForSideMismatch/rollCpuShotSide) - applied to
+        // the CPU batsman too, for consistency with the human-batting path above, but kept
+        // shallow: the CPU's shot side is a single extra roll purely for this probability, not a
+        // real simulated shot direction with its own visual (see rollCpuShotSide's doc for why).
+        val cpuShotSide = rollCpuShotSide(skillFactor, sideFromDirection(direction))
+        val timing = if (cpuShotSide != sideFromDirection(direction)) downgradeTimingTier(rawTiming) else rawTiming
         val aggression = rollCpuAggression(skillFactor)
         val fieldMode = currentFieldMode()
         val (rawOutcome, rawRuns) = BattingResolver.resolve(batsman.battingSkill, timing, aggression, output.onStumps, fieldMode)
@@ -482,6 +517,27 @@ class MatchViewModel(
             roll < 0.7 + skillFactor * 0.1 -> Aggression.GROUND
             else -> Aggression.AERIAL
         }
+    }
+
+    /**
+     * PART 5's on/off-side mismatch, wired into the CPU batting path (see [downgradeForSideMismatch]
+     * for the human-batting version and the mechanic's full doc). The CPU doesn't have a real
+     * simulated shot direction of its own - only aggression is rolled (see [rollCpuAggression]) -
+     * so rather than build out a whole parallel "CPU shot direction" concept purely to compare
+     * sides (which would also need its own visual, per BatterShot/MatchVisuals, to not be
+     * misleading), this is kept intentionally shallow: a single roll for just the SIDE the CPU
+     * ends up committed to, weighted by skill (a stronger batsman reads the actual line better and
+     * more often ends up on the matching, non-penalized side), used only to decide whether the
+     * mismatch penalty applies to this ball - not stored or visualized anywhere.
+     */
+    private fun rollCpuShotSide(skillFactor: Double, actualSide: ShotSide): ShotSide {
+        val matchChance = (0.5 + skillFactor * 0.3).coerceAtMost(0.9)
+        return if (Random.nextDouble() < matchChance) actualSide else oppositeSide(actualSide)
+    }
+
+    private fun oppositeSide(side: ShotSide): ShotSide = when (side) {
+        ShotSide.ON_SIDE -> ShotSide.OFF_SIDE
+        ShotSide.OFF_SIDE -> ShotSide.ON_SIDE
     }
 
     private fun currentFieldMode(): FieldMode {

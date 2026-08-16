@@ -22,14 +22,18 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.graphics.Path
 import com.example.cricketgame.data.Aggression
 import com.example.cricketgame.data.BattingTimingZones
 import com.example.cricketgame.data.PitchLength
+import com.example.cricketgame.data.ShotSide
 import com.example.cricketgame.data.TimingQuality
+import com.example.cricketgame.data.sideFromDirection
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.PI
 import kotlin.math.cos
+import kotlin.math.pow
 import kotlin.math.sin
 
 /**
@@ -203,12 +207,7 @@ fun PitchBackdrop(
         )
 
         if (showBall) {
-            val ballPos = ballOffsetFor(
-                w, h, progress, pitchLength, postPitchTilt, shot, postOutcome, batterCenterX, batterFeetY
-            )
-            val radius = ballRadiusFor(shot, postOutcome)
-            drawCircle(Color(0xFFB71C1C), radius = radius, center = ballPos)
-            drawCircle(Color.White, radius = radius, center = ballPos, style = Stroke(width = 2f))
+            drawTravellingBall(w, h, progress, pitchLength, postPitchTilt, shot, postOutcome, batterCenterX, batterFeetY)
         }
     }
 }
@@ -243,6 +242,75 @@ internal fun ballTravelX(w: Float, progress: Float, pitchLength: PitchLength, po
     val bend = t * t
     val maxDeviation = w * 0.08f
     return w / 2f + postPitchTilt.coerceIn(-1f, 1f) * maxDeviation * bend
+}
+
+/** How high (px) the ball floats above its ground/shadow position ([ballTravelX]/[ballTravelY]) at
+ *  a point in its pre-contact bowler->batsman flight - PART 2's bounce arc: it falls from the
+ *  bowler's overhead release down to the pitch (height 0 exactly at [bouncePointProgress]'s bounce
+ *  point, eased so the fall visibly accelerates rather than being linear), then rises again toward
+ *  the batsman, leveling out at a lower height than the release (contact happens around bat height,
+ *  not overhead) - a genuine dip-then-rise parabolic arc rather than the flat/straight travel path
+ *  this used to be. Purely a drawn vertical offset for where the ball SPRITE is painted - the
+ *  ground/shadow position from ballTravelX/ballTravelY (and everything downstream of it, like the
+ *  post-pitch curve) is unaffected; see PitchBackdrop/BowlingAimPitch for how the two combine. */
+internal fun ballHeightFor(progress: Float, pitchLength: PitchLength): Float {
+    val bounce = bouncePointProgress(pitchLength)
+    val p = progress.coerceIn(0f, 1f)
+    val releaseHeight = 42f
+    val contactHeight = 22f
+    return if (p <= bounce) {
+        val t = if (bounce <= 0f) 1f else p / bounce
+        releaseHeight * (1f - t * t) // eased fall - slow at first, accelerating into the bounce
+    } else {
+        val t = (p - bounce) / (1f - bounce)
+        val riseEase = 1f - (1f - t) * (1f - t) // eased rise - quick off the bounce, leveling out
+        contactHeight * riseEase
+    }
+}
+
+/** Whether the ball is still on its pre-contact bowler->batsman flight (as opposed to its
+ *  post-outcome miss/contact trajectory) - shared by the pitch views to decide whether to draw the
+ *  bounce-arc height offset/shadow (pre-contact only; post-outcome trajectories have their own
+ *  established visuals, e.g. the aerial shot's own mid-flight radius bulge). Mirrors the same
+ *  condition [ballOffsetFor] uses internally to pick which position function to call. */
+internal fun isPreContactBall(shot: BatterShot?, postOutcomeT: Float): Boolean = shot == null || postOutcomeT <= 0f
+
+/**
+ * Draws the travelling ball itself, shared by PitchBackdrop and BowlingAimPitch so both pitch
+ * views draw it identically: while still on its pre-contact flight ([isPreContactBall]), a ground
+ * shadow at its actual travel position plus the ball sprite offset upward by the bounce-arc height
+ * (see [ballHeightFor]) - the shadow stays anchored to the flight path so the gap between it and
+ * the ball is what actually reads as "height" (a standard cheap pseudo-3D trick, not a real
+ * z-axis). Past that (post-outcome), just the ball at its own position, undecorated - those
+ * trajectories already have their own established visual language (e.g. the aerial shot's radius
+ * bulge in [ballRadiusFor]) and don't need a ground shadow.
+ */
+internal fun DrawScope.drawTravellingBall(
+    w: Float,
+    h: Float,
+    progress: Float,
+    pitchLength: PitchLength,
+    postPitchTilt: Float,
+    shot: BatterShot?,
+    postOutcomeT: Float,
+    batterCenterX: Float,
+    batterFeetY: Float
+) {
+    val groundPos = ballOffsetFor(w, h, progress, pitchLength, postPitchTilt, shot, postOutcomeT, batterCenterX, batterFeetY)
+    val radius = ballRadiusFor(shot, postOutcomeT)
+    val drawPos = if (isPreContactBall(shot, postOutcomeT)) {
+        val height = ballHeightFor(progress, pitchLength)
+        drawOval(
+            Color(0x33000000),
+            topLeft = Offset(groundPos.x - radius * 0.9f, groundPos.y - radius * 0.32f),
+            size = Size(radius * 1.8f, radius * 0.64f)
+        )
+        Offset(groundPos.x, groundPos.y - height)
+    } else {
+        groundPos
+    }
+    drawCircle(Color(0xFFB71C1C), radius = radius, center = drawPos)
+    drawCircle(Color.White, radius = radius, center = drawPos, style = Stroke(width = 2f))
 }
 
 /** How a missed (RED-zone) delivery's ball ends up, once its post-outcome flight completes. */
@@ -431,6 +499,54 @@ private fun DrawScope.drawFootShadow(centerX: Float, feetY: Float, scale: Float)
     )
 }
 
+// --- PART 1: shared limb/torso primitives, for a more human silhouette than a flat single-line
+// stick figure - a small joint-bend and a tapered torso read as an actual body far more than
+// uniform-width strokes do, without needing a real 3D/skeletal rig. Shared by both the bowler and
+// batter figures below so the upgrade is consistent across both screens.
+
+/** A two-segment limb (e.g. upper arm + forearm, or thigh + shin) bent at [joint] - a single
+ *  straight line reads as a rigid stick limb; two shorter segments either side of a small joint
+ *  circle reads as an actual elbow/knee. */
+private fun DrawScope.drawJointedLimb(from: Offset, joint: Offset, to: Offset, brush: Brush, strokeWidth: Float) {
+    drawLine(brush, from, joint, strokeWidth = strokeWidth, cap = StrokeCap.Round)
+    drawLine(brush, joint, to, strokeWidth = strokeWidth * 0.82f, cap = StrokeCap.Round)
+    drawCircle(brush, radius = strokeWidth * 0.42f, center = joint)
+}
+
+/** A leg bent at the knee toward [foot] from [hip] - the knee sits partway down and biased toward
+ *  the foot's x (rather than straight below the hip), for a bent running/stance silhouette. */
+private fun DrawScope.drawBentLeg(hip: Offset, foot: Offset, brush: Brush, strokeWidth: Float) {
+    val knee = Offset(hip.x + (foot.x - hip.x) * 0.55f, hip.y + (foot.y - hip.y) * 0.55f)
+    drawJointedLimb(hip, knee, foot, brush, strokeWidth)
+}
+
+/** An arm bent at the elbow toward [hand] from [shoulder] - see [drawBentLeg]. */
+private fun DrawScope.drawBentArm(shoulder: Offset, hand: Offset, brush: Brush, strokeWidth: Float) {
+    val elbow = Offset(shoulder.x + (hand.x - shoulder.x) * 0.55f, shoulder.y + (hand.y - shoulder.y) * 0.4f)
+    drawJointedLimb(shoulder, elbow, hand, brush, strokeWidth)
+}
+
+/** The torso as a tapered polygon (wider at the shoulders, narrower at the waist) rather than a
+ *  single flat-width stroke, plus a faint shaded stripe down one side for a bit of rounded volume
+ *  instead of a flat cutout - both purely Canvas-primitive depth/shape cues, no bitmaps. */
+private fun DrawScope.drawTorso(centerX: Float, top: Float, bottom: Float, shoulderWidth: Float, waistWidth: Float, brush: Brush) {
+    val path = Path().apply {
+        moveTo(centerX - shoulderWidth / 2f, top)
+        lineTo(centerX + shoulderWidth / 2f, top)
+        lineTo(centerX + waistWidth / 2f, bottom)
+        lineTo(centerX - waistWidth / 2f, bottom)
+        close()
+    }
+    drawPath(path, brush)
+    drawLine(
+        Color.Black.copy(alpha = 0.14f),
+        Offset(centerX - waistWidth * 0.22f, top + (bottom - top) * 0.1f),
+        Offset(centerX - waistWidth * 0.22f, bottom),
+        strokeWidth = waistWidth * 0.22f,
+        cap = StrokeCap.Round
+    )
+}
+
 /** internal (not private) so BowlingControls' larger single-pitch view can reuse these at a bigger scale. */
 internal fun DrawScope.drawStumps(centerX: Float, baseY: Float, scale: Float = 1f) {
     val height = 34f * scale
@@ -500,55 +616,83 @@ internal fun DrawScope.drawBrokenStumps(centerX: Float, baseY: Float, scale: Flo
 }
 
 /**
- * The fielding side's bowler at the bowling end, animated purely from the run-up sweep's
- * progress (0f..1f): a coarse 2-frame running cycle (bucketed by progress, not smoothly
- * interpolated) with a slight approach toward the crease, switching to a fixed delivery/release
- * stride once the sweep is most of the way through. Reused for both the CPU bowler (batting
- * screens, driven by the batting sweep) and the player's own bowler (bowling screen, driven by
- * their release-timing sweep) - same function, same poses, either way.
+ * The fielding side's bowler at the bowling end, animated from the run-up sweep's progress
+ * (0f..1f): a 3-frame running cycle - wide stride left, feet-together mid-stride, wide stride
+ * right - that cycles increasingly fast as approach nears the gather/release phase
+ * (approach^1.6 grows faster than approach itself, so the apparent stride rate visibly quickens
+ * rather than flipping at a flat, constant rate), then a distinct "gather" beat (planting,
+ * bowling arm drawn back to cock it) before a clear "release" beat (arm fully extended overhead) -
+ * PART 4's fuller run-in, replacing the old flat 2-frame cycle that jumped straight from running
+ * to a raised arm with no build-up. Reused for both the CPU bowler (batting screens, driven by the
+ * batting sweep) and the player's own bowler (bowling screen, driven by their release-timing
+ * sweep) - same function, same poses, either way. Limbs are jointed (see [drawBentLeg]/
+ * [drawBentArm]) and the torso a tapered polygon (see [drawTorso]) for a more human silhouette
+ * (PART 1); [depthScale] also very subtly grows the whole figure as approach nears 1, a cheap
+ * perspective cue suggesting the bowler is physically closing the distance, not just sliding.
  */
 internal fun DrawScope.drawBowlerFigure(centerX: Float, feetY: Float, progress: Float, scale: Float = 1f) {
     val approach = progress.coerceIn(0f, 1f)
+    val depthScale = scale * (0.94f + 0.06f * approach)
     // The bowler sits at the BOTTOM of the pitch, so running in toward release means moving UP
     // the canvas (toward the batter's end) - feet's y decreases as approach nears 1.
-    val feet = feetY + (1f - approach) * 18f * scale
-    val bodyTop = feet - 58f * scale
-    val bodyBottom = feet - 14f * scale
-    val headCenter = Offset(centerX, bodyTop - 12f * scale)
-    val headRadius = 12f * scale
+    val feet = feetY + (1f - approach) * 18f * depthScale
+    val bodyTop = feet - 58f * depthScale
+    val bodyBottom = feet - 14f * depthScale
+    val headCenter = Offset(centerX, bodyTop - 12f * depthScale)
+    val headRadius = 12f * depthScale
 
-    drawFootShadow(centerX, feet, scale)
+    drawFootShadow(centerX, feet, depthScale)
 
-    // Fielding side's shirt/cap - reuses the ball/wicket-flash red already in the palette rather
-    // than introducing a new color, distinguishing it from the batter's blue. A gradient rather
-    // than a flat fill gives the torso a bit of shading/sheen.
+    // Fielding side's shirt/trouser palette - reuses the ball/wicket-flash red already in the
+    // palette rather than introducing a new color, distinguishing it from the batter's blue.
+    // Gradients rather than flat fills give both a bit of shading/sheen.
     val shirt = Color(0xFFB71C1C)
     val shirtOutline = Color(0xFF7F0000)
     val shirtBrush = Brush.verticalGradient(listOf(Color(0xFFE53935), shirt, shirtOutline))
+    val trouserBrush = Brush.linearGradient(listOf(Color.White, Color(0xFFCFCFCF)))
 
     drawCircle(shirt, radius = headRadius, center = headCenter)
-    drawCircle(shirtOutline, radius = headRadius, center = headCenter, style = Stroke(width = 2f * scale))
+    drawCircle(shirtOutline, radius = headRadius, center = headCenter, style = Stroke(width = 2f * depthScale))
     // Cap brim - a small kit detail giving the head more silhouette than a bare circle.
     drawRoundRect(
         Color.White,
-        topLeft = Offset(headCenter.x, headCenter.y - 3f * scale),
-        size = Size(13f * scale, 4f * scale),
-        cornerRadius = CornerRadius(2f * scale, 2f * scale)
+        topLeft = Offset(headCenter.x, headCenter.y - 3f * depthScale),
+        size = Size(13f * depthScale, 4f * depthScale),
+        cornerRadius = CornerRadius(2f * depthScale, 2f * depthScale)
     )
-    drawLine(shirtBrush, Offset(centerX, bodyTop), Offset(centerX, bodyBottom), strokeWidth = 14f * scale, cap = StrokeCap.Round)
+    drawTorso(centerX, bodyTop, bodyBottom, shoulderWidth = 20f * depthScale, waistWidth = 13f * depthScale, brush = shirtBrush)
 
-    if (approach > 0.8f) {
-        // delivery stride: front leg planted, back leg trailing, bowling arm raised overhead
-        drawLine(Color(0xFFEEEEEE), Offset(centerX, bodyBottom), Offset(centerX + 16f * scale, feet), strokeWidth = 8f * scale, cap = StrokeCap.Round)
-        drawLine(Color(0xFFEEEEEE), Offset(centerX, bodyBottom), Offset(centerX - 10f * scale, feet - 6f * scale), strokeWidth = 8f * scale, cap = StrokeCap.Round)
-        drawLine(shirt, Offset(centerX, bodyTop + 6f * scale), Offset(centerX + 8f * scale, bodyTop - 24f * scale), strokeWidth = 6f * scale, cap = StrokeCap.Round)
-    } else {
-        // coarse running cycle: a discrete pose switch between two strides, not smooth interpolation
-        val strideForward = (approach * 10f).toInt() % 2 == 0
-        val frontDx = if (strideForward) 14f else -14f
-        drawLine(Color(0xFFEEEEEE), Offset(centerX, bodyBottom), Offset(centerX + frontDx * scale, feet), strokeWidth = 8f * scale, cap = StrokeCap.Round)
-        drawLine(Color(0xFFEEEEEE), Offset(centerX, bodyBottom), Offset(centerX - frontDx * scale, feet), strokeWidth = 8f * scale, cap = StrokeCap.Round)
-        drawLine(shirt, Offset(centerX, bodyTop + 6f * scale), Offset(centerX - frontDx * 0.5f * scale, bodyTop - 6f * scale), strokeWidth = 6f * scale, cap = StrokeCap.Round)
+    val armStroke = 7f * depthScale
+    val legStroke = 8f * depthScale
+    val hip = Offset(centerX, bodyBottom)
+    val shoulder = Offset(centerX, bodyTop + 6f * depthScale)
+
+    when {
+        approach >= 0.93f -> {
+            // release: front leg planted well forward, back leg trailing, bowling arm fully
+            // extended overhead through an elbow joint - the clear release beat.
+            drawBentLeg(hip, Offset(centerX + 18f * depthScale, feet), trouserBrush, legStroke)
+            drawBentLeg(hip, Offset(centerX - 12f * depthScale, feet - 6f * depthScale), trouserBrush, legStroke)
+            drawBentArm(shoulder, Offset(centerX + 10f * depthScale, bodyTop - 26f * depthScale), shirtBrush, armStroke)
+        }
+        approach >= 0.8f -> {
+            // gather: front leg starting to plant, bowling arm drawn back and down to cock it -
+            // a distinct beat between running and the release, rather than jumping straight there.
+            drawBentLeg(hip, Offset(centerX + 10f * depthScale, feet), trouserBrush, legStroke)
+            drawBentLeg(hip, Offset(centerX - 8f * depthScale, feet - 4f * depthScale), trouserBrush, legStroke)
+            drawBentArm(shoulder, Offset(centerX - 14f * depthScale, bodyBottom + 6f * depthScale), shirtBrush, armStroke)
+        }
+        else -> {
+            val cycleIndex = ((approach.pow(1.6f)) * 18f).toInt() % 3
+            val frontDx = when (cycleIndex) { 0 -> 14f; 2 -> -14f; else -> 0f }
+            // Feet lift slightly together at the mid-stride frame (cycleIndex 1) to read as an
+            // airborne moment between footfalls, rather than three grounded poses in a row.
+            val airborne = cycleIndex == 1
+            val liftY = if (airborne) 5f * depthScale else 0f
+            drawBentLeg(hip, Offset(centerX + frontDx * depthScale, feet - liftY), trouserBrush, legStroke)
+            drawBentLeg(hip, Offset(centerX - frontDx * depthScale, feet - liftY), trouserBrush, legStroke)
+            drawBentArm(shoulder, Offset(centerX - frontDx * 0.6f * depthScale, bodyTop - 4f * depthScale), shirtBrush, armStroke)
+        }
     }
 }
 
@@ -558,10 +702,15 @@ private val BatBrush = Brush.linearGradient(listOf(Color(0xFFA1887F), Color(0xFF
 /**
  * The batter figure. With [shot] null, this is the resting stance shown while waiting for the
  * next delivery. With [shot] set (briefly, right after a ball is resolved), it instead shows a
- * pose roughly matching the aggression/timing that was played. The ball's own post-outcome flight
- * (see [ballOffsetFor]) - not this figure - carries the actual trajectory now.
+ * pose roughly matching the aggression/timing/side that was played (see the batEnd table below -
+ * PART 3's on/off-side shapes, layered onto the existing aggression-tier shapes). The ball's own
+ * post-outcome flight (see [ballOffsetFor]) - not this figure - carries the actual trajectory now.
  * [swooshProgress]/[dustProgress] (each 0f..1f, see [rememberShotImpactProgress]) drive the
- * bat-swing trail and contact dust puff.
+ * bat-swing trail and contact dust puff. Torso is a tapered polygon (see [drawTorso], PART 1) and
+ * the bat arm a jointed shoulder->elbow->grip chain (see [drawBentArm]) rather than a floating bat
+ * line disconnected from the body; pads stay the existing rounded-rect shape (already a
+ * deliberately stylized, not stick-line, leg guard - there's little to gain jointing a leg that's
+ * mostly hidden under padding anyway).
  */
 internal fun DrawScope.drawBatterFigure(
     centerX: Float,
@@ -575,6 +724,7 @@ internal fun DrawScope.drawBatterFigure(
     val bodyBottom = feetY - 14f * scale
     val headCenter = Offset(centerX, bodyTop - 12f * scale)
     val headRadius = 12f * scale
+    val shoulder = Offset(centerX, bodyTop + 6f * scale)
 
     drawFootShadow(centerX, feetY, scale)
 
@@ -596,7 +746,7 @@ internal fun DrawScope.drawBatterFigure(
         )
     }
 
-    drawLine(helmetBrush, Offset(centerX, bodyTop), Offset(centerX, bodyBottom), strokeWidth = 14f * scale, cap = StrokeCap.Round)
+    drawTorso(centerX, bodyTop, bodyBottom, shoulderWidth = 18f * scale, waistWidth = 12f * scale, brush = helmetBrush)
 
     // Pads - chunkier rounded leg guards with a thin trim stripe, standing in for the plain thin
     // leg lines this used to be.
@@ -615,30 +765,44 @@ internal fun DrawScope.drawBatterFigure(
 
     if (shot == null) {
         // resting stance - bat grounded just in front, waiting for the next ball
-        drawLine(
-            BatBrush,
-            Offset(centerX + 10f * scale, bodyBottom - 6f * scale),
-            Offset(centerX + 22f * scale, feetY - 2f * scale),
-            strokeWidth = 6f * scale,
-            cap = StrokeCap.Round
-        )
+        val grip = Offset(centerX + 10f * scale, bodyBottom - 6f * scale)
+        drawBentArm(shoulder, grip, helmetBrush, 6f * scale)
+        drawLine(BatBrush, grip, Offset(centerX + 22f * scale, feetY - 2f * scale), strokeWidth = 6f * scale, cap = StrokeCap.Round)
         return
     }
 
     val missed = shot.timingQuality == TimingQuality.RED
+    // PART 3: on/off-side categorization - same left/right split as everywhere else that reads a
+    // slider release direction (ballTravelX, contactBallOffset, MatchViewModel.lineFromDirection):
+    // negative = ON_SIDE (leg side), non-negative = OFF_SIDE. sideSign mirrors the swing's X
+    // offsets so the bat visibly swings toward the correct side, and the GROUND/AERIAL shapes
+    // below further differ in target height/reach by side (not just mirrored X) so an on-side shot
+    // reads as a distinct, flatter cross-batted swing (pull/flick/slog) rather than just the
+    // off-side drive shape flipped left-right.
+    val side = sideFromDirection(shot.direction)
+    val sideSign = if (side == ShotSide.ON_SIDE) -1f else 1f
     val batStart = Offset(centerX + 8f * scale, bodyBottom - 4f * scale)
     val batEnd = when {
-        missed -> Offset(centerX - 22f * scale, feetY + 6f * scale) // bat trails behind - beaten by the ball
-        shot.aggression == Aggression.DEFENSIVE -> Offset(centerX + 10f * scale, feetY) // checked, straight and close
+        missed -> Offset(centerX - 22f * scale, feetY + 6f * scale) // bat trails behind - beaten by the ball, side-agnostic
+        shot.aggression == Aggression.DEFENSIVE -> Offset(centerX + 6f * scale * sideSign, feetY) // checked, straight and close - a small side nudge only
         shot.aggression == Aggression.GROUND -> {
             val reach = if (shot.timingQuality == TimingQuality.GREEN) 36f else 24f
-            Offset(centerX + reach * scale, feetY - 8f * scale)
+            if (side == ShotSide.OFF_SIDE) {
+                Offset(centerX + reach * scale, feetY - 8f * scale) // driven out in front - a vertical-bat drive shape
+            } else {
+                Offset(centerX - reach * scale, bodyBottom + 6f * scale) // swung across the body, flatter/higher - a cross-batted pull/flick shape
+            }
         }
         else -> { // AERIAL
             val reach = if (shot.timingQuality == TimingQuality.GREEN) 30f else 20f
-            Offset(centerX + reach * scale, bodyTop - reach * scale)
+            if (side == ShotSide.OFF_SIDE) {
+                Offset(centerX + reach * scale, bodyTop - reach * scale) // high and vertical - a lofted drive shape
+            } else {
+                Offset(centerX - reach * scale, bodyTop - reach * 0.6f * scale) // flatter and more horizontal - a slog/pull shape
+            }
         }
     }
+    drawBentArm(shoulder, batStart, helmetBrush, 6f * scale)
     drawBatSwoosh(batStart, batEnd, swooshProgress, shot, strokeWidth = 6f * scale)
     if (!missed) drawDustPuff(batStart, dustProgress, scale)
     // The ball itself now animates the actual post-contact/post-miss path (see
