@@ -124,6 +124,8 @@ fun MatchScreen(
         if (showBackdrop) {
             PitchBackdrop(
                 progress = runUp.progress,
+                pitchLength = runUp.pitchLength,
+                postPitchTilt = runUp.postPitchTilt,
                 showBall = uiState.phase == DeliveryPhase.RUN_UP || uiState.phase == DeliveryPhase.BALL_RESULT,
                 shot = batterShot,
                 ballSeq = uiState.ballSeq
@@ -146,6 +148,8 @@ fun MatchScreen(
                     } else {
                         BowlingControls(
                             runUpProgress = runUp.progress,
+                            pitchLength = runUp.pitchLength,
+                            postPitchTilt = runUp.postPitchTilt,
                             tiltDirection = tilt,
                             bowlerName = uiState.bowlerName,
                             shot = batterShot,
@@ -208,7 +212,9 @@ private fun rememberScreenShakeOffset(ballSeq: Int, shouldShake: Boolean): Offse
 private fun batterShotFrom(uiState: MatchUiState): BatterShot? {
     val aggression = uiState.lastBallAggression ?: return null
     val timing = uiState.lastBallTimingQuality ?: return null
-    return BatterShot(aggression, timing, uiState.lastBallTiltDirection, uiState.lastBallRuns)
+    return BatterShot(
+        aggression, timing, uiState.lastBallTiltDirection, uiState.lastBallRuns, uiState.lastBallOnStumps
+    )
 }
 
 /**

@@ -30,6 +30,8 @@ import com.example.cricketgame.data.PitchLine
 @Composable
 fun BowlingControls(
     runUpProgress: Float,
+    pitchLength: PitchLength,
+    postPitchTilt: Float,
     tiltDirection: Float,
     bowlerName: String,
     shot: BatterShot? = null,
@@ -88,6 +90,8 @@ fun BowlingControls(
                 isHolding = isHolding,
                 liveTilt = tiltDirection,
                 progress = runUpProgress,
+                pitchLength = pitchLength,
+                postPitchTilt = postPitchTilt,
                 shot = shot,
                 ballSeq = ballSeq
             )
@@ -101,13 +105,18 @@ private fun BowlingAimPitch(
     isHolding: Boolean,
     liveTilt: Float,
     progress: Float,
+    pitchLength: PitchLength,
+    postPitchTilt: Float,
     shot: BatterShot?,
     ballSeq: Int
 ) {
     val impact = rememberShotImpactProgress(ballSeq, shot)
+    val postOutcome = rememberPostOutcomeProgress(ballSeq, shot, progress)
     Canvas(modifier = Modifier.fillMaxSize()) {
         val w = size.width
         val h = size.height
+        val batterCenterX = w / 2f - 100f
+        val batterFeetY = h * 0.10f
 
         // Shared with PitchBackdrop (the batting screen's pitch) so both screens read as the
         // same place.
@@ -118,17 +127,25 @@ private fun BowlingAimPitch(
         // layout so both screens read as the same place
         drawStumps(centerX = w / 2f, baseY = h * 0.94f, scale = 1.6f)
         // batting-end stumps (the target, and where length is measured toward) at the top
-        drawStumps(centerX = w / 2f, baseY = h * 0.06f, scale = 1.6f)
+        val breakT = stumpsBreakT(shot, postOutcome)
+        if (breakT != null) {
+            drawBrokenStumps(centerX = w / 2f, baseY = h * 0.06f, scale = 1.6f, breakT = breakT)
+        } else {
+            drawStumps(centerX = w / 2f, baseY = h * 0.06f, scale = 1.6f)
+        }
 
         drawBowlerFigure(centerX = w / 2f + 90f, feetY = h * 0.80f, progress = progress, scale = 1.6f)
         drawBatterFigure(
-            centerX = w / 2f - 100f, feetY = h * 0.10f, scale = 1.6f, shot = shot,
+            centerX = batterCenterX, feetY = batterFeetY, scale = 1.6f, shot = shot,
             swooshProgress = impact.swoosh, dustProgress = impact.dust
         )
 
-        val ballY = ballTravelY(h, progress)
-        drawCircle(Color(0xFFB71C1C), radius = 14f, center = Offset(w / 2f, ballY))
-        drawCircle(Color.White, radius = 14f, center = Offset(w / 2f, ballY), style = Stroke(width = 2f))
+        val ballPos = ballOffsetFor(
+            w, h, progress, pitchLength, postPitchTilt, shot, postOutcome, batterCenterX, batterFeetY
+        )
+        val ballRadius = ballRadiusFor(shot, postOutcome)
+        drawCircle(Color(0xFFB71C1C), radius = ballRadius, center = ballPos)
+        drawCircle(Color.White, radius = ballRadius, center = ballPos, style = Stroke(width = 2f))
 
         if (isHolding) {
             val touchPoint = Offset(aimFraction.x * w, aimFraction.y * h)

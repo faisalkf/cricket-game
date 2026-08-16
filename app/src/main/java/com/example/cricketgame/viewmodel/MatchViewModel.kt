@@ -55,6 +55,10 @@ data class MatchUiState(
     val lastBallTimingQuality: TimingQuality? = null,
     val lastBallTiltDirection: Float = 0f,
     val lastBallRuns: Int = 0,
+    // Whether the just-played delivery was on the stumps - drives the missed-ball visual (stumps
+    // broken vs. stopped at the batsman, see BatterShot/MatchVisuals) exactly like it already
+    // drives BattingResolver's own bowled/lbw-vs-dot split.
+    val lastBallOnStumps: Boolean = false,
     val matchResult: String? = null,
     // Increments once per resolved ball (see applyBallResult) - a stable key for one-shot
     // per-ball effects (shot-impact animation, screen shake, sound) that lastBallSummary alone
@@ -68,12 +72,21 @@ data class MatchUiState(
  */
 data class RunUpState(
     val progress: Float = 0f,       // 0f..1f, one eased one-way sweep per delivery
-    val quality: TimingQuality = TimingQuality.RED
+    val quality: TimingQuality = TimingQuality.RED,
     // Also drives the pitch visuals (bowler run-up figure + travelling ball) directly - the
     // ball's Y position on the pitch is a function of this same value (see ballTravelY), so its
     // visual travel is always in sync with the timing gauge/quality classification above it: a
     // RED-zone release is early in the ball's flight, GREEN is well along, and a completed sweep
     // has the ball arriving at the stumps.
+    //
+    // pitchLength/postPitchTilt below are this delivery's actual (or, before it's known, best
+    // current guess at) pitch length and post-pitch tilt - see ballTravelX - carried alongside
+    // progress/quality (rather than reset every tick) so the bend they drive stays stable across
+    // a delivery once set. Known upfront for CPU bowling (rolled before the sweep even starts);
+    // for the player's own bowling they default to a straight ball until release actually locks
+    // them in (see bowlDelivery), since the real values aren't known before then.
+    val pitchLength: PitchLength = PitchLength.GOOD_LENGTH,
+    val postPitchTilt: Float = 0f
 )
 
 /**
@@ -124,6 +137,7 @@ class MatchViewModel(
     private var cpuDeliveryOnStumps = false
     private var cpuDeliveryLine = PitchLine.ON_STUMPS
     private var cpuDeliveryLength = PitchLength.GOOD_LENGTH
+    private var cpuDeliveryTilt = 0f
 
     private var runUpJob: Job? = null
 
@@ -185,12 +199,17 @@ class MatchViewModel(
         postPitchTilt: Float
     ) {
         if (_uiState.value.phase != DeliveryPhase.RUN_UP) return
-        finishBallFlight()
 
         val bowler = currentBowler
         val output = BowlingResolver.resolve(
             BowlingInput(targetLine, targetLength, deliveryTiming, bowler.bowlingSkill, postPitchTilt)
         )
+        // Lock in this delivery's actual pitch length and the tilt sampled at release - the same
+        // postPitchTilt BowlingResolver just used for line/length drift - before easing the
+        // remaining flight to completion, so the post-pitch curve (see ballTravelX) bends the
+        // right way for the whole catch-up animation rather than only starting to apply mid-way.
+        _runUp.update { it.copy(pitchLength = output.actualLength, postPitchTilt = postPitchTilt) }
+        finishBallFlight()
 
         // CPU batsman's approach is rolled now, biased by skill and by how good the release was.
         val batsman = currentStriker
@@ -239,6 +258,15 @@ class MatchViewModel(
             rollCpuDelivery()
         }
 
+        // Fresh run-up state for the new delivery. When the CPU is bowling, its pitch
+        // length/tilt are already rolled above, so the post-pitch curve (see ballTravelX) can
+        // reflect them from the very first frame; when the player is bowling, both default to a
+        // straight ball until their release locks in the real values (see bowlDelivery).
+        _runUp.value = RunUpState(
+            pitchLength = if (playerBatting) cpuDeliveryLength else PitchLength.GOOD_LENGTH,
+            postPitchTilt = if (playerBatting) cpuDeliveryTilt else 0f
+        )
+
         _uiState.update {
             it.copy(
                 phase = DeliveryPhase.RUN_UP,
@@ -275,7 +303,7 @@ class MatchViewModel(
             var elapsed = 0L
             while (isActive && elapsed < periodMs) {
                 val progress = easedSweep(elapsed, periodMs)
-                _runUp.value = RunUpState(progress, timingQualityFor(progress))
+                _runUp.update { it.copy(progress = progress, quality = timingQualityFor(progress)) }
                 delay(16)
                 elapsed += 16
             }
@@ -356,6 +384,7 @@ class MatchViewModel(
         cpuDeliveryOnStumps = output.onStumps
         cpuDeliveryLine = output.actualLine
         cpuDeliveryLength = output.actualLength
+        cpuDeliveryTilt = tilt
     }
 
     private fun rollCpuDeliveryTiming(skillFactor: Double): DeliveryTiming {
@@ -464,6 +493,7 @@ class MatchViewModel(
                 lastBallTimingQuality = result.timingQuality,
                 lastBallTiltDirection = result.tiltDirection,
                 lastBallRuns = result.runsScored,
+                lastBallOnStumps = result.onStumps,
                 recentBalls = currentOverCodes.toList(),
                 ballSeq = it.ballSeq + 1
             )
