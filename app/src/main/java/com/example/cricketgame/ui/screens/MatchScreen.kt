@@ -28,6 +28,7 @@ import com.example.cricketgame.data.Team
 import com.example.cricketgame.data.TimingQuality
 import com.example.cricketgame.data.TossChoice
 import com.example.cricketgame.sound.SoundEffects
+import com.example.cricketgame.ui.scene3d.Pitch3DScene
 import com.example.cricketgame.viewmodel.MatchUiState
 import com.example.cricketgame.viewmodel.DeliveryPhase
 import com.example.cricketgame.viewmodel.MatchViewModel
@@ -36,12 +37,13 @@ import kotlinx.coroutines.delay
 import kotlin.math.sin
 
 /**
- * Real match screen, driven by [MatchViewModel]: a full-screen [PitchBackdrop] as the base layer
- * (shared by both batting and bowling now - see its doc), with everything else floating on top of
- * it rather than pushing it down - the scoreboard/timing HUD near the top, the slider control near
- * the bottom (BattingControls or BowlingControls, whichever side the player's on), the outcome of
- * each ball as a fading badge, and an end-of-over scorecard/innings-break/match-over overlay when
- * applicable.
+ * Real match screen, driven by [MatchViewModel]: a full-screen [Pitch3DScene] (SceneView/Filament
+ * 3D, replacing the old Canvas-based PitchBackdrop - see its doc) as the base layer, shared by
+ * both batting and bowling, with everything else floating on top of it in dedicated 2D Compose
+ * space rather than pushing it down or overlaying the viewport - the scoreboard/timing HUD near
+ * the top, the slider control near the bottom (BattingControls or BowlingControls, whichever side
+ * the player's on), the outcome of each ball as a fading badge, and an end-of-over scorecard/
+ * innings-break/match-over overlay when applicable.
  */
 @Composable
 fun MatchScreen(
@@ -100,11 +102,12 @@ fun MatchScreen(
             .fillMaxSize()
             .graphicsLayer(translationX = shakeOffset.x, translationY = shakeOffset.y)
     ) {
-        PitchBackdrop(
+        Pitch3DScene(
             progress = runUp.progress,
             pitchLength = runUp.pitchLength,
             postPitchTilt = runUp.postPitchTilt,
             showBall = uiState.phase == DeliveryPhase.RUN_UP || uiState.phase == DeliveryPhase.BALL_RESULT,
+            isPlayerBatting = uiState.isPlayerBatting,
             shot = batterShot,
             outcome = uiState.lastBallOutcome,
             ballSeq = uiState.ballSeq,
