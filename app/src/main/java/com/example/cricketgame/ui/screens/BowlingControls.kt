@@ -2,12 +2,13 @@ package com.example.cricketgame.ui.screens
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.cricketgame.data.BowlingTimingZones
 import com.example.cricketgame.data.DeliveryTiming
@@ -24,6 +25,11 @@ import com.example.cricketgame.data.DeliveryTiming
  * delivery quality, with GREEN further split by MatchViewModel into a standard-best-ball/
  * perfect-ball tier (see BowlingTimingZones.greenTier). Length is no longer player-chosen - the
  * bowler always aims for a good length; only release accuracy can still knock it off that.
+ *
+ * Bowler name and zone folded onto one colored line (was two, plus a third numeric-readout line
+ * below the slider) - this is the panel sitting directly on top of the PLAYER's own bowler, whose
+ * run-up animates through the bottom ~12% of [PitchBackdrop] (see drawBowlerFigure), so trimming
+ * it matters here even more than on the batting screen's equivalent panel.
  */
 @Composable
 fun BowlingControls(
@@ -43,19 +49,19 @@ fun BowlingControls(
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .background(Color(0xCC1B1B1B), shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp))
-            .padding(16.dp)
+            .background(Color(0xB3141414))
+            .padding(horizontal = 14.dp, vertical = 8.dp)
     ) {
-        Text("Bowling: $bowlerName", color = Color.White)
-        Spacer(Modifier.height(4.dp))
-        Text("Timing: ${zoneLabel(currentZone)}", color = zoneColor(currentZone))
-        Spacer(Modifier.height(4.dp))
-        TimingGauge(progress = runUpProgress, bands = BowlingGaugeBands)
-        Spacer(Modifier.height(8.dp))
         Text(
-            "Line: ${"%.2f".format(direction)}  (left = leg side, right = off side; drag and release to bowl)",
-            color = Color.White
+            "$bowlerName  •  ${zoneLabel(currentZone)}",
+            color = zoneColor(currentZone),
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.Bold,
+            maxLines = 1
         )
+        Spacer(Modifier.height(2.dp))
+        TimingGauge(progress = runUpProgress, bands = BowlingGaugeBands)
+        Spacer(Modifier.height(2.dp))
         Slider(
             value = direction,
             onValueChange = { direction = it },

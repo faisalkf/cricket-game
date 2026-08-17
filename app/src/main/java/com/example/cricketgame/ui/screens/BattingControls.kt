@@ -2,12 +2,13 @@ package com.example.cricketgame.ui.screens
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.cricketgame.data.TimingQuality
 
@@ -21,6 +22,11 @@ import com.example.cricketgame.data.TimingQuality
  * instant sets timing quality and, within GREEN, the aggression tier (see
  * MatchViewModel.battingAggressionFor) - there's no separate player-chosen aggression slider
  * anymore; it's fully implied by timing precision.
+ *
+ * Trimmed to one status line (colored by [timingIndicator] instead of spelling out the zone in a
+ * full sentence) plus the gauge and slider, no separate numeric-readout line - on the batting
+ * screen the CPU's bowler run-up animates through the bottom ~12% of [PitchBackdrop], and the old
+ * three-line-plus-instructions panel ran roughly twice as tall as that, sitting well on top of it.
  *
  * This composable is intentionally UI-only; BattingResolver.resolve() does the actual scoring.
  */
@@ -36,15 +42,18 @@ fun BattingControls(
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .background(Color(0xCC1B1B1B), shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp))
-            .padding(16.dp)
+            .background(Color(0xB3141414))
+            .padding(horizontal = 14.dp, vertical = 8.dp)
     ) {
-        Text("Timing: ${timingIndicator.name} - release the slider on GREEN", color = Color.White)
-        Spacer(Modifier.height(4.dp))
+        Text(
+            timingIndicator.name,
+            color = timingQualityColor(timingIndicator),
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.Bold
+        )
+        Spacer(Modifier.height(2.dp))
         TimingGauge(progress = runUpProgress)
-        Spacer(Modifier.height(8.dp))
-
-        Text("Shot direction: ${"%.2f".format(direction)}  (left = leg side, right = off side)", color = Color.White)
+        Spacer(Modifier.height(2.dp))
         Slider(
             value = direction,
             onValueChange = { direction = it },
@@ -52,4 +61,13 @@ fun BattingControls(
             onValueChangeFinished = { onPlayShot(direction) }
         )
     }
+}
+
+/** Shared RED/YELLOW/GREEN -> color mapping for the compact timing labels (batting's own
+ *  [TimingQuality] here; bowling's finer-grained [com.example.cricketgame.data.DeliveryTiming]
+ *  has its own [zoneColor] in BowlingControls). */
+internal fun timingQualityColor(quality: TimingQuality): Color = when (quality) {
+    TimingQuality.RED -> Color(0xFFEF5350)
+    TimingQuality.YELLOW -> Color(0xFFFFC107)
+    TimingQuality.GREEN -> Color(0xFF66BB6A)
 }

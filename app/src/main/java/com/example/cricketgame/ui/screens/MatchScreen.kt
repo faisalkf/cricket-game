@@ -159,28 +159,39 @@ fun MatchScreen(
     }
 }
 
-/** The floating scoreboard/status HUD - score, overs, target, who's bowling to whom, this over's
- *  balls so far - a semi-transparent panel near the top of the screen rather than a solid header
- *  pushing the pitch down, kept compact so it doesn't cover the batter/keeper standing just below
- *  it on the full-screen pitch. */
+/**
+ * The floating scoreboard/status HUD - score, overs, target, who's bowling to whom, this over's
+ * balls so far. Deliberately a thin, full-bleed strip pinned to the very top edge (no side
+ * margins/rounded card - reads as a frame around the action, not a panel sitting on it) rather
+ * than the old multi-line rounded card: that card ran ~100dp+ tall, which on the shared
+ * full-screen [PitchBackdrop] directly overlapped the keeper (drawn at 4.5% of canvas height),
+ * the far-end stumps (6%) and the batter's feet (10%) - all real figures, not incidental. Two
+ * compact lines at small type sizes keep this at roughly a third of that height so it clears
+ * that zone instead of sitting on top of it; the second line folds the bowler/striker names and
+ * this-over ball log together rather than giving each its own row.
+ */
 @Composable
 private fun ScoreboardOverlay(uiState: MatchUiState, modifier: Modifier = Modifier) {
-    val targetSuffix = uiState.target?.let { "   Target: $it" } ?: ""
+    val targetSuffix = uiState.target?.let { "  Target: $it" } ?: ""
+    val recentSuffix = if (uiState.recentBalls.isNotEmpty()) "  •  ${uiState.recentBalls.joinToString(" ")}" else ""
     Column(
         modifier = modifier
-            .padding(top = 12.dp, start = 12.dp, end = 12.dp)
-            .background(Color(0xCC1B1B1B), shape = RoundedCornerShape(14.dp))
-            .padding(horizontal = 16.dp, vertical = 10.dp)
+            .fillMaxWidth()
+            .background(Color(0xB3141414))
+            .padding(horizontal = 14.dp, vertical = 6.dp)
     ) {
         Text(
-            "${uiState.battingTeamName} ${uiState.score}/${uiState.wickets}   Overs: ${uiState.oversText}$targetSuffix",
-            style = MaterialTheme.typography.titleMedium,
-            color = Color.White
+            "${uiState.battingTeamName} ${uiState.score}/${uiState.wickets}  •  ${uiState.oversText}$targetSuffix",
+            style = MaterialTheme.typography.labelLarge,
+            color = Color.White,
+            maxLines = 1
         )
-        Text("${uiState.bowlerName} to ${uiState.strikerName}", style = MaterialTheme.typography.bodyMedium, color = Color.White)
-        if (uiState.recentBalls.isNotEmpty()) {
-            Text("This over: ${uiState.recentBalls.joinToString(" ")}", color = Color.White)
-        }
+        Text(
+            "${uiState.bowlerName} to ${uiState.strikerName}$recentSuffix",
+            style = MaterialTheme.typography.labelSmall,
+            color = Color(0xCCFFFFFF),
+            maxLines = 1
+        )
     }
 }
 
@@ -274,6 +285,13 @@ private fun batterShotFrom(uiState: MatchUiState): BatterShot? {
  * appears and fades over whatever's currently on screen, plus a quick red flash for a wicket.
  * Always composed (so AnimatedVisibility can animate both the enter AND the exit), just empty
  * while [visible] is false.
+ *
+ * Pinned to the top-END corner (below [ScoreboardOverlay]'s strip), not top-center: the batter
+ * stands just left of horizontal center near the top of [PitchBackdrop] (batterCenterX is
+ * w/2 - 100), so a center-anchored badge sat directly over the batter/keeper/stumps at exactly
+ * the moment there's an outcome to show for them - the worst possible timing. A small corner
+ * chip at a reduced type size (titleMedium, not headlineMedium) keeps it legible without
+ * blanketing the middle of the pitch where the action actually is.
  */
 @Composable
 private fun OutcomeOverlay(visible: Boolean, summary: String?, modifier: Modifier = Modifier) {
@@ -292,14 +310,14 @@ private fun OutcomeOverlay(visible: Boolean, summary: String?, modifier: Modifie
         else -> Color(0xFF37474F)
     }
 
-    Box(modifier = modifier, contentAlignment = Alignment.TopCenter) {
+    Box(modifier = modifier, contentAlignment = Alignment.TopEnd) {
         AnimatedVisibility(
             visible = visible && isWicket,
             modifier = Modifier.matchParentSize(),
             enter = fadeIn(tween(80)),
             exit = fadeOut(tween(500))
         ) {
-            Box(Modifier.fillMaxSize().background(Color(0x66D32F2F)))
+            Box(Modifier.fillMaxSize().background(Color(0x4DD32F2F)))
         }
 
         AnimatedVisibility(
@@ -309,15 +327,16 @@ private fun OutcomeOverlay(visible: Boolean, summary: String?, modifier: Modifie
         ) {
             Box(
                 modifier = Modifier
-                    .padding(top = 90.dp)
-                    .background(badgeColor, shape = RoundedCornerShape(16.dp))
-                    .padding(horizontal = 28.dp, vertical = 14.dp)
+                    .padding(top = 52.dp, end = 12.dp)
+                    .background(badgeColor, shape = RoundedCornerShape(12.dp))
+                    .padding(horizontal = 16.dp, vertical = 8.dp)
             ) {
                 Text(
                     displayedSummary,
                     color = Color.White,
-                    style = MaterialTheme.typography.headlineMedium,
-                    fontWeight = FontWeight.Bold
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1
                 )
             }
         }
