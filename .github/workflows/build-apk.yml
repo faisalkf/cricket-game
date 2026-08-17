@@ -20,7 +20,7 @@ jobs:
       - name: Generate Gradle wrapper (if missing)
         run: |
           if [ ! -f "gradlew" ]; then
-            gradle wrapper --gradle-version 8.7
+            gradle wrapper --gradle-version 8.14.5
             chmod +x gradlew
           fi
 
