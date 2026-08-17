@@ -55,6 +55,10 @@ dependencies {
     implementation("androidx.compose.material3:material3")
     implementation("androidx.navigation:navigation-compose:2.7.7")
 
+    // 3D rendering (Filament, via SceneView's Compose-native wrapper) - replaces the Canvas-based
+    // MatchVisuals pitch/figures. 3D-only artifact, not arsceneview - no AR/camera-passthrough here.
+    implementation("io.github.sceneview:sceneview:4.30.0")
+
     // Google Play services / AdMob - wire up when ready to integrate ads
     // implementation("com.google.android.gms:play-services-ads:23.2.0")
 
